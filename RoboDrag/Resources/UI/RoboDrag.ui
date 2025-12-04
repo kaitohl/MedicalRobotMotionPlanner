@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>RoboDrag</class>
+ <widget class="qMRMLWidget" name="RoboDrag">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>487</width>
+    <height>558</height>
+   </rect>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="ctkCollapsibleButton" name="robotCollapsibleButton">
+     <property name="text">
+      <string>Setup IK</string>
+     </property>
+     <layout class="QFormLayout" name="formLayout_2">
+      <item row="3" column="1">
+       <widget class="QPushButton" name="loadpushbutton">
+        <property name="text">
+         <string>Load</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QLineEdit" name="grouplineEdit"/>
+      </item>
+      <item row="2" column="1">
+       <widget class="QLineEdit" name="robotlineEdit"/>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="grouplabel">
+        <property name="text">
+         <string>Planning Group Name:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="robotnamelabel">
+        <property name="text">
+         <string>Robot Name:</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="outputsCollapsibleButton">
+     <property name="text">
+      <string>Streming</string>
+     </property>
+     <layout class="QFormLayout" name="formLayout_4">
+      <item row="2" column="1">
+       <widget class="QPushButton" name="streamstopbutton">
+        <property name="text">
+         <string>Stop Streaming</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QPushButton" name="streamstartbutton">
+        <property name="text">
+         <string>Start Streaming</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QPushButton" name="ikpushButton">
+        <property name="text">
+         <string>IK Request</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QLineEdit" name="eelineEdit"/>
+      </item>
+      <item row="0" column="0">
+       <widget class="QLabel" name="eelabel">
+        <property name="text">
+         <string>End Effector Name:</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="advancedCollapsibleButton">
+     <property name="text">
+      <string>Advanced</string>
+     </property>
+     <property name="collapsed">
+      <bool>true</bool>
+     </property>
+     <layout class="QFormLayout" name="formLayout_3">
+      <item row="0" column="0">
+       <widget class="QLabel" name="label_4">
+        <property name="text">
+         <string>Invert threshold: </string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QCheckBox" name="invertOutputCheckBox">
+        <property name="toolTip">
+         <string>If checked, values above threshold are set to 0. If unchecked, values below are set to 0.</string>
+        </property>
+        <property name="text">
+         <string/>
+        </property>
+        <property name="invertThreshold" stdset="0">
+         <string/>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QPushButton" name="applyButton">
+     <property name="enabled">
+      <bool>false</bool>
+     </property>
+     <property name="toolTip">
+      <string>Run the algorithm.</string>
+     </property>
+     <property name="text">
+      <string>Apply</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>ctkCollapsibleButton</class>
+   <extends>QWidget</extends>
+   <header>ctkCollapsibleButton.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>qMRMLWidget</class>
+   <extends>QWidget</extends>
+   <header>qMRMLWidget.h</header>
+   <container>1</container>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>
