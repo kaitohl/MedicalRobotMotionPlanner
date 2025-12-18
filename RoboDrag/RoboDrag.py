@@ -1,6 +1,8 @@
 import logging
 import os, time
 from typing import Annotated, Optional
+import xml.etree.ElementTree as ET
+import math
 
 import vtk
 
@@ -13,6 +15,9 @@ from slicer.parameterNodeWrapper import (
     parameterNodeWrapper,
     WithinRange,
 )
+
+
+
 
 
 from slicer import vtkMRMLScalarVolumeNode
@@ -145,6 +150,7 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.fromtransform = None
         self.totransform = None
         self.robot = None
+        self.jointPositionsRad = [0.0] * 6  # Initialize joint positions array
 
     def setup(self) -> None:
         """Called when the user opens the module the first time and the widget is initialized."""
@@ -179,6 +185,14 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.ui.ikpushButton.connect("clicked(bool)", self.onikbutton)
         self.ui.opacitypushButton.connect("clicked(bool)", self.onopacitybutton)
         self.ui.robotColorButton.connect("colorChanged(QColor)", self.onRobotColorChanged)
+        self.ui.zeropushButton.connect("clicked(bool)", self.onzerobutton)
+        self.ui.j1slider.connect("valueChanged(int)", lambda v: self.onJointSliderChanged(0, v))
+        self.ui.j2slider.connect("valueChanged(int)", lambda v: self.onJointSliderChanged(1, v))
+        self.ui.j3slider.connect("valueChanged(int)", lambda v: self.onJointSliderChanged(2, v))
+        self.ui.j4slider.connect("valueChanged(int)", lambda v: self.onJointSliderChanged(3, v))
+        self.ui.j5slider.connect("valueChanged(int)", lambda v: self.onJointSliderChanged(4, v))
+        self.ui.j6slider.connect("valueChanged(int)", lambda v: self.onJointSliderChanged(5, v))
+
         
         # Make sure parameter node is initialized (needed for module reload)
         self.initializeParameterNode()
@@ -264,6 +278,9 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 
     def onloadbutton(self) -> None:
         
+        # Get robot node
+        robotNode = self.ui.ikrobotcombobox.currentNode()
+        
         # check if sphere model already exists (slicer.util.getNode raises if not found)
         try:
             model = slicer.util.getNode("ProbeSphere")
@@ -286,9 +303,45 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             print(f"Found ros2 root transform: {self.totransform.GetName()}")
         
         ikgroup = self.ui.grouplineEdit.text
-        robot = self.ui.robotlineEdit.text
-        self.robot = self.logic.setupikforRobot(group=ikgroup, robotname=robot, fromtransformname=self.fromtransform.GetName(), totransformname=self.totransform.GetName())
+        self.robot = self.logic.setupikforRobot(group=ikgroup, robotNode=robotNode, fromtransformname=self.fromtransform.GetName(), totransformname=self.totransform.GetName())
+
+        pnode = robotNode.GetNthNodeReference("parameter", 0)  # vtkMRMLROS2ParameterNode
+        urdf_xml = pnode.GetParameterAsString("robot_description")
         
+        
+        joint_names = self.logic.parse_joint_names_from_urdf(urdf_xml)
+        print("URDF joints:", joint_names)
+
+        # Pick the first 6 (or however many sliders you have)
+        joint_names = joint_names[:6]
+
+        labels = [
+            self.ui.j1label,
+            self.ui.j2label,
+            self.ui.j3label,
+            self.ui.j4label,
+            self.ui.j5label,
+            self.ui.j6label,
+        ]
+
+        for i, lbl in enumerate(labels):
+            if i < len(joint_names):
+                lbl.setText(joint_names[i])
+            else:
+                lbl.setText(f"Joint {i+1}")
+        
+        limits = self.logic.parse_joint_limits_from_urdf(urdf_xml)
+        print(f"Parsed joint limits: {limits}")
+        sliders = [
+        self.ui.j1slider,
+        self.ui.j2slider,
+        self.ui.j3slider,
+        self.ui.j4slider,
+        self.ui.j5slider,
+        self.ui.j6slider,
+        ]
+        self.logic.setJointSlidersFromUrdfLimits(limits,sliders)
+         
     def onstreamstartbutton(self) -> None:
         ee = self.ui.eelineEdit.text
         robotmodel = self.robot
@@ -319,12 +372,42 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.logic.setopacity(robot, opacity)
         
     def onRobotColorChanged(self) -> None:
-
-        # Get currently selected robot from your qMRMLNodeComboBox
-        robotNode = self.ui.robotcomboBox.currentNode()  # or self.ui.comboBox.currentNode()
-        color = self.ui.robotColorButton.color
+        color = self.ui.robotColorButton.color    
+        robotNode = self.ui.robotcomboBox.currentNode()
         self.logic.setRobotColor(robotNode, color)
         
+    def onJointSliderChanged(self, idx: int, valueDeg: int) -> None:
+        # store as radians
+        self.jointPositionsRad[idx] = math.radians(valueDeg)
+
+        # publish *all 6* joint values every time
+        if self.logic is not None and self.logic.joint_state_publisher is not None:
+            self.logic._publish_joint_state(self.jointPositionsRad)
+        
+        print(f"All joint values (rad): {[f'{j:.4f}' for j in self.jointPositionsRad]}")
+        
+    def onzerobutton(self) -> None:
+        
+        sliders = [
+        self.ui.j1slider,
+        self.ui.j2slider,
+        self.ui.j3slider,
+        self.ui.j4slider,
+        self.ui.j5slider,
+        self.ui.j6slider,
+        ]
+
+        for s in sliders:
+            s.blockSignals(True)
+            s.setValue(0)
+            s.blockSignals(False)
+            
+        self.jointPositionsRad = [0.0] * 6
+        # publish zero positions
+        if self.logic is not None and self.logic.joint_state_publisher is not None:
+            self.logic._publish_joint_state(self.jointPositionsRad)
+
+
 
 #
 # RoboDragLogic
@@ -564,8 +647,29 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
                 pass
         self.obsNode = None
         self.obsTag = None
+
+    def getOrReusePublisher(self, topic="/ghost/joint_states"):
+        pubs = slicer.util.getNodesByClass("vtkMRMLROS2PublisherNode")
+        # getNodesByClass might be list or dict depending on Slicer version
+        if isinstance(pubs, dict):
+            pubs = list(pubs.values())
+
+        for p in pubs:
+            # method name varies by build; try both
+            if hasattr(p, "GetTopicName") and p.GetTopicName() == topic:
+                print("Reusing existing publisher for topic:", topic)
+                return p
+            if hasattr(p, "GetTopic") and p.GetTopic() == topic:
+                print("Reusing existing publisher for topic:", topic)
+                return p
+
+        print("Creating new publisher for topic:", topic)
+        rosLogic = slicer.util.getModuleLogic("ROS2")
+        rosNode = rosLogic.GetDefaultROS2Node()
         
-    def setupikforRobot(self, group, robotname, fromtransformname, totransformname):
+        return rosNode.CreateAndAddPublisherNode("JointState", topic)
+        
+    def setupikforRobot(self, group, robotNode, fromtransformname, totransformname):
         if group:
             self.plangroup = group
             print(f"Set IK group to '{group}'")
@@ -582,19 +686,16 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
             self.toNode = toNode
             print(f"Nodes set for IK: from '{fromtransformname}' to '{totransformname}'")
         
-        rosLogic = slicer.util.getModuleLogic('ROS2')
-        rosNode = rosLogic.GetDefaultROS2Node()
-        t = rosNode.GetRobotNodeByName(robotname)
-        bool = t.setupIK(group)
-        self.joint_state_publisher = rosNode.CreateAndAddPublisherNode('JointState', "/ghost/ghost_joint_states")
+        bool = robotNode.setupIK(group)
+        
+        self.joint_state_publisher = self.getOrReusePublisher("/ghost/joint_states")
         
         if bool:
-            print(f"IK setup for robot '{robotname}' and group '{group}' successful.")
-            return t
+            print(f"IK setup for robot '{robotNode.GetName()}' and group '{group}' successful.")
+            return robotNode
         else:
-            raise RuntimeError(f"IK setup for robot '{robotname}' and group '{group}' failed.")
+            raise RuntimeError(f"IK setup for robot '{robotNode.GetName()}' and group '{group}' failed.")
         
-
     def compute_ik_once(self, endeffectorname: str, robotmodel=None, ikgroup=None):
 
         # --- Get Slicer transform nodes ---
@@ -692,20 +793,26 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
 
         return self.obsTag
     
+    # Set robot opacity
     def setopacity(self, robotmodel, opacity):
         
+        # Get number of model nodes under robotmodel
         numModels = robotmodel.GetNumberOfNodeReferences("model")  
 
+        # Loop through each model node and set opacity
         for i in range(numModels):  
             modelNode = robotmodel.GetNthNodeReference("model", i)  
             displayNode = modelNode.GetDisplayNode()  
             if displayNode:  
                 displayNode.SetOpacity(opacity)
-                
-    def setRobotColor(self, robotNode, color):
 
+    # Set robot color
+    def setRobotColor(self, robotNode, color):
+        
+        # Get number of model nodes under robotmodel
         numModels = robotNode.GetNumberOfNodeReferences("model")  
 
+        # Loop through each model node and set color
         for i in range(numModels):  
             modelNode = robotNode.GetNthNodeReference("model", i)  
             displayNode = modelNode.GetDisplayNode()  
@@ -715,7 +822,66 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
                 b = color.blue() / 255.0
                 displayNode.SetColor(r, g, b)
     
+    # Parse urdf to get joint limits
+    def parse_joint_limits_from_urdf(self, urdf_xml: str):        
+        root = ET.fromstring(urdf_xml)
+        limits = {}  # joint_name -> (lower, upper) floats
+
+        for joint in root.findall("joint"):
+            jtype = joint.get("type", "")
+            name = joint.get("name", "")
+            if jtype == "fixed" or not name:
+                continue
+
+            limit = joint.find("limit")
+            if limit is None:
+                continue
+
+            lo = limit.get("lower")
+            hi = limit.get("upper")
+            if lo is None or hi is None:
+                continue
+
+            limits[name] = (float(lo), float(hi))
+
+        return limits
     
+    def setJointSlidersFromUrdfLimits(self, limits_rad, sliders):
+
+        if len(sliders) != len(limits_rad):
+            print(
+                f"[RoboDrag] Slider count ({len(sliders)}) "
+                f"!= joint count ({len(limits_rad)})"
+            )
+
+        for slider, (jointName, (lo_rad, hi_rad)) in zip(sliders, limits_rad.items()):
+            lo_deg = int(round(math.degrees(lo_rad)))
+            hi_deg = int(round(math.degrees(hi_rad)))
+
+            if lo_deg > hi_deg:
+                lo_deg, hi_deg = hi_deg, lo_deg
+
+            slider.setRange(lo_deg, hi_deg)
+            slider.setValue(0)
+
+            print(f"[RoboDrag] {jointName}: {lo_deg}..{hi_deg} deg")
+            
+    def parse_joint_names_from_urdf(self, urdf_xml: str):
+        root = ET.fromstring(urdf_xml)
+        names = []
+
+        for joint in root.findall("joint"):
+            jtype = joint.get("type", "")
+            name = joint.get("name", "")
+            if not name:
+                continue
+            if jtype == "fixed":
+                continue
+            names.append(name)
+
+        return names
+
+
     
         
 
