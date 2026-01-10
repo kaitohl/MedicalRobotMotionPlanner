@@ -179,7 +179,8 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         # These connections ensure that we update parameter node when scene is closed
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.StartCloseEvent, self.onSceneStartClose)
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.EndCloseEvent, self.onSceneEndClose)
-
+        self.ui.tabWidget.currentChanged.connect(self.onTabChanged)
+        
         # Buttons
         self.ui.applyButton.connect("clicked(bool)", self.onApplyButton)
         self.ui.loadpushbutton.connect("clicked(bool)", self.onloadbutton)
@@ -294,46 +295,37 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             # Stop any prior streaming callbacks before we touch transforms
             self.logic.removeObserver()
                 
-            # 1. Get robot node
+            # Get robot node
             robotNode = self.ui.ikrobotcombobox.currentNode()
             if not robotNode:
                 print("Error: No robot selected.")
                 return
 
-            # 2. Extract URDF XML
+            # Extract URDF XML
             pnode = robotNode.GetNthNodeReference("parameter", 0)
             if not pnode:
                 print("Error: No parameter node found for robot.")
                 return
             urdf_xml = pnode.GetParameterAsString("robot_description")
 
-            # 3. Auto-detect Root and Tip Links
-            root_link, tip_link = self.logic.find_root_and_deepest_tip(urdf_xml)
-            joint_names = self.logic.parse_joint_names_from_urdf(urdf_xml)
-            limits = self.logic.parse_joint_limits_from_urdf(urdf_xml)
-            
-            # Store for later use
-            self.rootlink = root_link
-            self.tiplink = tip_link
-            self.logic.joint_names = joint_names
-            self.logic.last_ik_solution = [0.0] * len(joint_names)
-            self.jointPositionsRad = [0.0] * len(joint_names)
-            
+            # Auto-detect Root and Tip Links
+            alllink = self.logic.parse_all_link_names_from_urdf(urdf_xml)
+            self.rootlink = alllink[0] #Stores first link as root link
+            self.tiplink = alllink[-1] #Stores last link as tip link
+
             # Check if links were found
-            if not root_link or not tip_link:
+            if not self.rootlink or not self.tiplink:
                 print("Error: Could not auto-detect kinematic chain from URDF.")
                 return
-            print(f"Auto-detected Chain for IK: {root_link} -> {tip_link}")
+            print(f"Auto-detected Chain for IK: {self.rootlink} -> {self.tiplink}")
             
-            # 4 Find Slicer Transforms for Root and Tip
+            # Find Slicer Transforms for Root Link
             try:
-                root_tf_node, tip_tf_node = self.logic.findRobotTransforms(root_link, tip_link)
-                self.totransform = root_tf_node  # This is our reference frame for IK (base)
+                self.totransform = self.logic.findRobotTransforms(self.rootlink)
             except RuntimeError as e:
                 print(f"Error locating robot transforms: {e}")
                 return
             
-            # 5 Handle Probe Sphere
             # Check if sphere model already exists, if not create model and store from transform
             try:
                 model = slicer.util.getNode("ProbeSphere")
@@ -348,12 +340,12 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 model = self.logic.createSphereModel()
                 self.fromtransform = self.logic.createLinearTransform()
                 self.logic.applyTransformToModel(model, self.fromtransform)
-
-            # 7. Call IK Setup with New Arguments
+                
+            # Call IK Setup with New Arguments
             try:
                 self.robot = self.logic.setupikforRobot(
-                    root_link=root_link, 
-                    tip_link=tip_link, 
+                    root_link=self.rootlink, 
+                    tip_link=self.tiplink, 
                     robotNode=robotNode, 
                     fromtransformname=self.fromtransform.GetName(), 
                     totransformname=self.totransform.GetName()
@@ -361,8 +353,14 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             except RuntimeError as e:
                 print(f"IK Setup Failed: {e}")
                 return
+            
+            joint_names = robotNode.GetJoints()
+            self.logic.joint_names = joint_names
+            self.logic.last_ik_solution = [0.0] * len(joint_names)
+            self.jointPositionsRad = [0.0] * len(joint_names)
+            
 
-            # 8. Enable buttons
+            # Enable buttons
             self.ui.zeropushButton.enabled = True
             self.ui.streamstartbutton.enabled = True
             self.ui.streamstopbutton.enabled = True
@@ -370,7 +368,8 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             self.ui.appCollapsibleButton.enabled = True
             self.ui.checkBox.enabled = True
             
-            # 9. Create Joint Sliders Dynamically
+            # Create Joint Sliders Dynamically
+            limits = self.logic.parse_joint_limits_from_urdf(urdf_xml)
             container = self.ui.Jointtab.layout()
             if container is not None:
                 # FIX: Iterate backwards to delete dynamic items but KEEP the zero button
@@ -389,10 +388,25 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
                 # Create sliders dynamically
                 for i, joint_name in enumerate(joint_names):
-                    joint_label = qt.QLabel(joint_name)
-                    joint_slider = qt.QSlider(qt.Qt.Horizontal)
+                    # --- 1. SETUP MAIN CONTAINER (Vertical: Label Top, Controls Bottom) ---
+                    joint_block_widget = qt.QWidget()
+                    joint_block_layout = qt.QVBoxLayout(joint_block_widget)
+                    joint_block_layout.setContentsMargins(0, 5, 0, 5) # Add small vertical spacing between joints
+                    joint_block_layout.setSpacing(2) # Reduce gap between label and slider
 
-                    # Apply limits
+                    # --- 2. SETUP CONTROLS CONTAINER (Horizontal: Slider Left, Spinbox Right) ---
+                    controls_layout = qt.QHBoxLayout()
+                    controls_layout.setContentsMargins(0, 0, 0, 0)
+
+                    # Create Widgets
+                    joint_label = qt.QLabel(joint_name)
+                    # Optional: Make label bold or smaller if you want
+                    # joint_label.setStyleSheet("font-weight: bold;")
+                    
+                    joint_slider = qt.QSlider(qt.Qt.Horizontal)
+                    joint_spinbox = qt.QDoubleSpinBox()
+
+                    # --- 3. CALCULATE LIMITS ---
                     lo_hi = limits.get(joint_name)
                     if lo_hi:
                         lo_deg = int(round(math.degrees(lo_hi[0])))
@@ -402,19 +416,42 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                     else:
                         lo_deg, hi_deg = -180, 180
 
+                    # --- 4. CONFIGURE SLIDER ---
                     joint_slider.setMinimum(lo_deg)
                     joint_slider.setMaximum(hi_deg)
                     joint_slider.setValue(0)
                     joint_slider.setTickInterval(10)
                     joint_slider.setTickPosition(qt.QSlider.TicksBelow)
 
-                    # Connect slider change
+                    # --- 5. CONFIGURE SPINBOX ---
+                    joint_spinbox.setMinimum(lo_deg)
+                    joint_spinbox.setMaximum(hi_deg)
+                    joint_spinbox.setSingleStep(1.0) 
+                    joint_spinbox.setValue(0)
+                    joint_spinbox.setSuffix(" deg")
+
+                    # --- 6. SYNC LOGIC ---
+                    # A. Slider moves -> Update Spinbox
+                    joint_slider.valueChanged.connect(lambda val, sb=joint_spinbox: sb.setValue(val))
+
+                    # B. Spinbox changes -> Update Slider
+                    joint_spinbox.valueChanged.connect(lambda val, sl=joint_slider: sl.setValue(int(val)))
+
+                    # C. Slider moves -> Trigger your IK Logic
                     joint_slider.valueChanged.connect(lambda value, idx=i: self.onJointSliderChanged(idx, value))
 
-                    # Note: addWidget appends to the end. 
-                    # If you want sliders BEFORE the button, use container.insertWidget(position, widget)
-                    container.addWidget(joint_label)
-                    container.addWidget(joint_slider)
+                    # --- 7. ADD TO LAYOUTS ---
+                    
+                    # Add Slider + Spinbox to the Horizontal controls layout
+                    controls_layout.addWidget(joint_slider)
+                    controls_layout.addWidget(joint_spinbox)
+                    
+                    # Add Label and the Controls Layout to the Main Vertical Block
+                    joint_block_layout.addWidget(joint_label)
+                    joint_block_layout.addLayout(controls_layout)
+                    
+                    # Add the whole block to your main container
+                    container.addWidget(joint_block_widget)     
             
     # def onloadbutton(self) -> None:
         
@@ -540,31 +577,35 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
     #         # 3. Start Streaming
     #         self.logic.addObserverComputeIK(ee_name, robotmodel, ikgroup)
 
+    # Button to allow 3d control of end-effector position
     def onstreamstartbutton(self) -> None:
             robotmodel = self.robot
             
             if robotmodel is None:
                 print("Robot model is not set up.")
                 return
-
-            # 3. Start Streaming
+            print("Started 3D Control...")
+            # Add observer to compute IK on transform changes
             self.logic.addObserverComputeIK(robotmodel)
-        
+    
+    # Button to stop 3d control of end-effector position
     def onstreamstopbutton(self) -> None:
         self.logic.removeObserver()
-        print("Stopped streaming.")
+        print("Stopped 3D Control")
 
-        
+    # Opacity button handler        
     def onopacitybutton(self) -> None:
         opacity = self.ui.spinBox.value / 100.0
         robot = self.ui.robotcomboBox.currentNode()
         self.logic.setopacity(robot, opacity)
-        
+    
+    # Robot color button handler    
     def onRobotColorChanged(self) -> None:
         color = self.ui.robotColorButton.color    
         robotNode = self.ui.robotcomboBox.currentNode()
         self.logic.setRobotColor(robotNode, color)
         
+    # Joint slider change handler
     def onJointSliderChanged(self, idx: int, valueDeg: int) -> None:
         # Ensure array is large enough
         while len(self.jointPositionsRad) <= idx:
@@ -578,7 +619,8 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             self.logic._publish_joint_state(self.jointPositionsRad)
         
         print(f"All joint values (rad): {[f'{j:.4f}' for j in self.jointPositionsRad]}")
-        
+    
+    # Zero button handler
     def onzerobutton(self) -> None:
         
         print("Resetting joint sliders to zero.")
@@ -587,24 +629,47 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         if container is None:
             return
 
-        sliders = []
+        sliders_found = []
+        
+        # 1. Iterate through the main layout to find the Row Widgets
         for i in range(container.count()):
-            widget = container.itemAt(i).widget()
-            if isinstance(widget, qt.QSlider):
-                sliders.append(widget)
+            item = container.itemAt(i)
+            widget = item.widget()
+            
+            # Skip empty items or the zero button itself
+            if widget is None or widget == self.ui.zeropushButton:
+                continue
+            
+            # 2. Look INSIDE the widget for the Slider and Spinbox
+            # findChild searches the children of the widget
+            slider = widget.findChild(qt.QSlider)
+            spinbox = widget.findChild(qt.QDoubleSpinBox)
+            
+            # If both exist, this is a valid joint row
+            if slider and spinbox:
+                sliders_found.append((slider, spinbox))
 
-        if not sliders:
+        if not sliders_found:
+            print("No sliders found to reset.")
             return
 
-        for s in sliders:
-            s.blockSignals(True)
-            s.setValue(0)
-            s.blockSignals(False)
+        # 3. Reset values
+        for slider, spinbox in sliders_found:
+            # Block signals on BOTH so we don't trigger 6 separate IK updates 
+            # or cause the two widgets to fight each other
+            slider.blockSignals(True)
+            spinbox.blockSignals(True)
+            
+            slider.setValue(0)
+            spinbox.setValue(0)
+            
+            slider.blockSignals(False)
+            spinbox.blockSignals(False)
 
         # Reset stored joint positions to match slider count
-        self.jointPositionsRad = [0.0] * len(sliders)
+        self.jointPositionsRad = [0.0] * len(sliders_found)
 
-        # Publish zero positions
+        # Publish zero positions once at the end
         if self.logic is not None and self.logic.joint_state_publisher is not None:
             self.logic._publish_joint_state(self.jointPositionsRad)
 
@@ -615,6 +680,50 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         else:
             self.ui.moveCollapsibleButton.collapsed = True
             self.ui.moveCollapsibleButton.enabled = False
+            
+    def onTabChanged(self, index):
+            # 1. Get the widget that is currently visible
+            current_widget = self.ui.tabWidget.widget(index)
+            
+            # 2. Check: Is this widget MY control tab?
+            if current_widget == self.ui.controltab:
+                print("Detected: controltab is now OPEN")
+                # Call your start function here
+                # self.enterControlMode()
+                
+            else:
+                print("Detected: controltab is now HIDDEN (User went somewhere else)")
+                self.cleanupControlFeatures()
+
+    def cleanupControlFeatures(self):
+        """Safely removes observer and models. Safe to call multiple times."""
+        
+        # A. Remove Observer
+        # (Your logic class already has this, but good to call it here)
+        if self.logic:
+            self.logic.removeObserver()
+
+        # B. Delete the Sphere Model (Safely)
+        try:
+            # Try to find the node by name
+            model = slicer.util.getNode("ProbeSphere")
+            if model:
+                slicer.mrmlScene.RemoveNode(model)
+                print("   ProbeSphere deleted.")
+        except slicer.util.MRMLNodeNotFoundException:
+            # If it's already gone, do nothing (pass)
+            pass
+
+        # C. Delete the Transform (Safely)
+        try:
+            # We use the variable self.fromtransform if you stored it
+            if self.fromtransform:
+                slicer.mrmlScene.RemoveNode(self.fromtransform)
+                self.fromtransform = None
+                print("   ProbeSphere_Transform deleted.")
+        except Exception:
+            pass
+    
 
 #
 # RoboDragLogic
@@ -710,10 +819,7 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
         return t
 
     def applyTransformToModel(self, modelNode, transformNode):
-        """
-        Parent a model under a transform (no hardening).
-        The model will move with the transform and stay linked.
-        """
+
         if modelNode is None or transformNode is None:
             raise ValueError("modelNode and transformNode are required")
 
@@ -728,137 +834,6 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
         s = slicer.mrmlScene
         return [s.GetNthNodeByClass(i, "vtkMRMLTransformNode")
                 for i in range(s.GetNumberOfNodesByClass("vtkMRMLTransformNode"))]
-
-    # def findLeafRobotTransform(self,prefix="ros2:tf2lookup:"):
-    #     """
-    #     Return the leaf (last) transform whose name starts with `prefix`.
-    #     If multiple leaves exist, prefer names containing flange/tool/ee/end/specholder.
-    #     """
-    #     ts = [t for t in self._allTransforms() if t.GetName().startswith(prefix)]
-    #     if not ts:
-    #         raise RuntimeError(f"No transforms found with prefix '{prefix}'.")
-
-    #     subset = set(ts)
-    #     children = {t: [] for t in ts}
-    #     for t in ts:
-    #         p = t.GetParentTransformNode()
-    #         if p in subset:
-    #             children[p].append(t)
-
-    #     # leaves = no children in this subset
-    #     leaves = [t for t in ts if len(children[t]) == 0]
-    #     if not leaves:
-    #         # degenerate case: single node with self? fallback to deepest by ancestry
-    #         leaves = ts
-
-    #     if len(leaves) == 1:
-    #         return leaves[0]
-
-    #     # prefer typical end-effector names
-    #     prefs = ("specholder", "flange", "tool", "ee", "end")
-    #     lname = [t.GetName().lower() for t in leaves]
-    #     for kw in prefs:
-    #         for i, n in enumerate(lname):
-    #             if kw in n:
-    #                 return leaves[i]
-
-    #     # fallback: deepest node by chain length
-    #     def depth(t):
-    #         d = 0
-    #         cur = t
-    #         while cur.GetParentTransformNode() in subset:
-    #             cur = cur.GetParentTransformNode()
-    #             d += 1
-    #         return d
-    #     leaves.sort(key=depth, reverse=True)
-    #     return leaves[0]
-    
-    def find_root_and_deepest_tip(self, urdf_string):
-            
-            root_xml = ET.fromstring(urdf_string)
-
-            # 1. Build TWO trees:
-            #    - actuated_tree: for finding the Root (ignores fixed joints)
-            #    - full_tree: for finding the Tip (includes fixed joints)
-            actuated_tree = {}
-            full_tree = {}
-            
-            all_child_links_actuated = set()
-
-            for link in root_xml.findall("link"):
-                name = link.get("name")
-                if name:
-                    actuated_tree.setdefault(name, [])
-                    full_tree.setdefault(name, [])
-
-            def is_actuated_joint(joint_elem):
-                jtype = joint_elem.get("type", "")
-                return jtype not in ("fixed", "")
-
-            for joint in root_xml.findall("joint"):
-                parent = joint.find("parent").get("link")
-                child  = joint.find("child").get("link")
-                if not parent or not child:
-                    continue
-
-                # Always add to full tree (for finding tip)
-                full_tree.setdefault(parent, []).append(child)
-
-                # Only add to actuated tree if movable (for finding root)
-                if is_actuated_joint(joint):
-                    actuated_tree.setdefault(parent, []).append(child)
-                    all_child_links_actuated.add(child)
-
-            # 2. Find Root using Actuated Tree
-            # Candidates are nodes in actuated_tree that are never children (in the actuated graph)
-            # This effectively skips 'world' and finds 'base_link'
-            candidate_roots = list(set(actuated_tree.keys()) - all_child_links_actuated)
-            
-            # Filter: Must have at least one outgoing actuated joint
-            candidate_roots = [r for r in candidate_roots if len(actuated_tree.get(r, [])) > 0]
-
-            if not candidate_roots:
-                return None, None
-
-            # Pick root with most reachable actuated joints
-            def reachable_count(start):
-                visited = set()
-                stack = [start]
-                while stack:
-                    n = stack.pop()
-                    if n in visited: continue
-                    visited.add(n)
-                    stack.extend(actuated_tree.get(n, []))
-                return len(visited)
-
-            root_link = max(candidate_roots, key=reachable_count)
-
-            # 3. Find Deepest Tip using FULL Tree
-            # Now that we know where the arm starts (root_link), we walk down EVERYTHING
-            # to find the furthest tool tip (even if attached via fixed joint).
-            max_depth = -1
-            deepest_tip = root_link
-            
-            # BFS using full_tree
-            queue = [(root_link, 0)]
-            while queue:
-                node, depth = queue.pop(0)
-                kids = full_tree.get(node, [])
-                
-                if not kids:
-                    # Leaf node in full tree
-                    if depth > max_depth:
-                        max_depth = depth
-                        deepest_tip = node
-                    elif depth == max_depth:
-                        # Tie-breaker: prefer standard ROS names
-                        if "tool" in node or "flange" in node or "ee" in node:
-                            deepest_tip = node
-                else:
-                    for k in kids:
-                        queue.append((k, depth + 1))
-
-            return root_link, deepest_tip
 
     def attachProbeTransformUnderLeaf(self, probeTransformName="ProbeSphere_Transform",
                                     prefix="ros2:tf2lookup:"):
@@ -897,54 +872,24 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
     #     return roots[0]  # the top-most (your “first ros2 tf lookup”)
     
     
-    def findRobotTransforms(self, root_link_name, tip_link_name):
-            """
-            Locates the Slicer Transform nodes driving the robot by looking for 
-            the visual models (e.g., 'base_link_model') and getting their parents.
-            """
-            
-            def _get_parent_transform_of_model(link_name):
-                # 1. Construct expected model name
-                # SlicerROS2 usually appends '_model' to the link name
-                model_name = f"{link_name}_model"
-                
-                # 2. Try to find the model node
-                try:
-                    model_node = slicer.util.getNode(model_name)
-                except slicer.util.MRMLNodeNotFoundException:
-                    model_node = None
-                    
-                # 3. If found, return its parent transform
-                if model_node:
-                    parent = model_node.GetParentTransformNode()
-                    if parent:
-                        print(f"Found transform for '{link_name}' via model '{model_name}': {parent.GetName()}")
-                        return parent
-                    else:
-                        print(f"Warning: Model '{model_name}' exists but is not parented under a transform.")
-                
-                # 4. Fallback: Try finding the transform directly (e.g. for 'world' which has no mesh)
-                # Common SlicerROS2 prefix
-                fallback_name = f"ros2:tf2lookup:{link_name}"
-                try:
-                    tf_node = slicer.util.getNode(fallback_name)
-                    print(f"Found transform directly: {fallback_name}")
-                    return tf_node
-                except slicer.util.MRMLNodeNotFoundException:
-                    pass
-
-                return None
-
-            # --- Execution ---
-            root_transform = _get_parent_transform_of_model(root_link_name)
-            tip_transform = _get_parent_transform_of_model(tip_link_name)
-
-            if not root_transform:
-                raise RuntimeError(f"Could not find Transform for root link '{root_link_name}'")
-            if not tip_transform:
-                print(f"Warning: Could not find Transform for tip link '{tip_link_name}'")
-                
-            return root_transform, tip_transform
+    def findRobotTransforms(self, link_name):
+        """
+        Locates the Slicer Transform node for a given link by looking for 
+        the visual model and getting its parent.
+        """
+        # Construct expected model name
+        model_name = f"{link_name}_model"
+        
+        # Find model node, if exsits, get its parent transform
+        model_node = slicer.util.getNode(model_name)
+        if model_node is None:
+            raise RuntimeError(f"Model for link '{link_name}' not found as '{model_name}'")
+        parent = model_node.GetParentTransformNode()
+        if parent:
+            print(f"Found transform for '{link_name}' via model '{model_name}': {parent.GetName()}")
+            return parent
+        else:
+            raise RuntimeError(f"Could not find Transform for link '{link_name}'")
 
     def addObserver(self, fromTransformName, toTransformName):
         """
@@ -1306,10 +1251,10 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
                 b = color.blue() / 255.0
                 displayNode.SetColor(r, g, b)
     
-    # Parse urdf to get joint limits
+    # Parse urdf to get joint limits. parses only non-fixed joints
     def parse_joint_limits_from_urdf(self, urdf_xml: str):        
         root = ET.fromstring(urdf_xml)
-        limits = {}  # joint_name -> (lower, upper) floats
+        limits = {} 
 
         for joint in root.findall("joint"):
             jtype = joint.get("type", "")
@@ -1329,6 +1274,50 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
             limits[name] = (float(lo), float(hi))
 
         return limits
+    
+    # Parse urdf to get joint names. parses only non-fixed joints
+    def parse_joint_names_from_urdf(self, urdf_xml: str):
+        root = ET.fromstring(urdf_xml)
+        names = []
+
+        for joint in root.findall("joint"):
+            jtype = joint.get("type", "")
+            name = joint.get("name", "")
+            if not name:
+                continue
+            if jtype == "fixed":
+                continue
+            names.append(name)
+
+        return names
+    
+    # Parse urdf to get all joint names and types
+    def parse_all_joint_types_from_urdf(self, urdf_xml: str):
+        root = ET.fromstring(urdf_xml)
+        name_to_type = {}
+
+        for joint in root.findall("joint"):
+            name = joint.get("name", "")
+            if not name:
+                continue
+            jtype = joint.get("type", "")
+            name_to_type[name] = jtype
+
+        return name_to_type
+    
+    # Parse urdf to get all link names
+    def parse_all_link_names_from_urdf(self, urdf_xml: str):
+        root = ET.fromstring(urdf_xml)
+        names = []
+
+        for link in root.findall("link"):
+            name = link.get("name", "")
+            if not name:
+                continue
+            names.append(name)
+
+        return names
+
     
     def setJointSlidersFromUrdfLimits(self, limits_rad, sliders):
 
@@ -1350,20 +1339,6 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
 
             print(f"[RoboDrag] {jointName}: {lo_deg}..{hi_deg} deg")
             
-    def parse_joint_names_from_urdf(self, urdf_xml: str):
-        root = ET.fromstring(urdf_xml)
-        names = []
-
-        for joint in root.findall("joint"):
-            jtype = joint.get("type", "")
-            name = joint.get("name", "")
-            if not name:
-                continue
-            if jtype == "fixed":
-                continue
-            names.append(name)
-
-        return names
 
 
     
