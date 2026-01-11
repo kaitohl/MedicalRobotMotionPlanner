@@ -154,6 +154,8 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.jointPositionsRad = []
         self.rootlink = None
         self.tiplink = None
+        self.ghosttiplink = None
+        self.isRobotLoaded = False
 
     def setup(self) -> None:
         """Called when the user opens the module the first time and the widget is initialized."""
@@ -183,9 +185,7 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         
         # Buttons
         self.ui.applyButton.connect("clicked(bool)", self.onApplyButton)
-        self.ui.loadpushbutton.connect("clicked(bool)", self.onloadbutton)
-        self.ui.streamstartbutton.connect("clicked(bool)", self.onstreamstartbutton)
-        self.ui.streamstopbutton.connect("clicked(bool)", self.onstreamstopbutton)
+        self.ui.usebutton.connect("clicked(bool)", self.onusebutton)
         self.ui.opacitypushButton.connect("clicked(bool)", self.onopacitybutton)
         self.ui.robotColorButton.connect("colorChanged(QColor)", self.onRobotColorChanged)
         self.ui.zeropushButton.connect("clicked(bool)", self.onzerobutton)
@@ -200,8 +200,6 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.ui.moveCollapsibleButton.collapsed = True
         self.ui.moveCollapsibleButton.enabled = False
         self.ui.checkBox.enabled = False
-        
-        
         
         # Make sure parameter node is initialized (needed for module reload)
         self.initializeParameterNode()
@@ -291,7 +289,10 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 self.logic.process(self.ui.inputSelector.currentNode(), self.ui.invertedOutputSelector.currentNode(),
                                    self.ui.imageThresholdSliderWidget.value, not self.ui.invertOutputCheckBox.checked, showResult=False)
    
-    def onloadbutton(self) -> None:
+    def onusebutton(self) -> None:
+        
+            self.isRobotLoaded = False
+            
             # Stop any prior streaming callbacks before we touch transforms
             self.logic.removeObserver()
                 
@@ -300,6 +301,8 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             if not robotNode:
                 print("Error: No robot selected.")
                 return
+            
+            print("Selected Robot:", robotNode.GetName())
 
             # Extract URDF XML
             pnode = robotNode.GetNthNodeReference("parameter", 0)
@@ -307,11 +310,21 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 print("Error: No parameter node found for robot.")
                 return
             urdf_xml = pnode.GetParameterAsString("robot_description")
+            print(urdf_xml)
 
             # Auto-detect Root and Tip Links
             alllink = self.logic.parse_all_link_names_from_urdf(urdf_xml)
-            self.rootlink = alllink[0] #Stores first link as root link
-            self.tiplink = alllink[-1] #Stores last link as tip link
+            if not alllink: 
+                print("Error: No links found in URDF.")
+                return
+            
+            # Store robot and links
+            self.robot = robotNode
+            self.rootlink = alllink[0] 
+            self.tiplink = alllink[-1]
+            self.ghosttiplink =  "ghost_" + self.tiplink
+            # Print tip link and ghost tip link
+            print(f"Tip Link: {self.tiplink}, Ghost Tip Link: {self.ghosttiplink}")
 
             # Check if links were found
             if not self.rootlink or not self.tiplink:
@@ -319,51 +332,18 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 return
             print(f"Auto-detected Chain for IK: {self.rootlink} -> {self.tiplink}")
             
-            # Find Slicer Transforms for Root Link
-            try:
-                self.totransform = self.logic.findRobotTransforms(self.rootlink)
-            except RuntimeError as e:
-                print(f"Error locating robot transforms: {e}")
-                return
-            
-            # Check if sphere model already exists, if not create model and store from transform
-            try:
-                model = slicer.util.getNode("ProbeSphere")
-            except slicer.util.MRMLNodeNotFoundException:
-                model = None
-
-            if model is not None:
-                print("Sphere model already exists.")
-                self.fromtransform = slicer.util.getNode("ProbeSphere_Transform")
-            else:
-                print("Creating sphere model...")
-                model = self.logic.createSphereModel()
-                self.fromtransform = self.logic.createLinearTransform()
-                self.logic.applyTransformToModel(model, self.fromtransform)
-                
-            # Call IK Setup with New Arguments
-            try:
-                self.robot = self.logic.setupikforRobot(
-                    root_link=self.rootlink, 
-                    tip_link=self.tiplink, 
-                    robotNode=robotNode, 
-                    fromtransformname=self.fromtransform.GetName(), 
-                    totransformname=self.totransform.GetName()
-                )
-            except RuntimeError as e:
-                print(f"IK Setup Failed: {e}")
-                return
-            
+            # Get joint names
             joint_names = robotNode.GetJoints()
             self.logic.joint_names = joint_names
             self.logic.last_ik_solution = [0.0] * len(joint_names)
             self.jointPositionsRad = [0.0] * len(joint_names)
             
-
+            # Establish ROS 2 Publisher for Joint States
+            self.logic.joint_state_publisher = self.logic.getOrReusePublisher("/ghost/joint_states")
+            print("ROS 2 Publisher initialized on /ghost/joint_states")
+            
             # Enable buttons
             self.ui.zeropushButton.enabled = True
-            self.ui.streamstartbutton.enabled = True
-            self.ui.streamstopbutton.enabled = True
             self.ui.appCollapsibleButton.collapsed = False
             self.ui.appCollapsibleButton.enabled = True
             self.ui.checkBox.enabled = True
@@ -451,147 +431,12 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                     joint_block_layout.addLayout(controls_layout)
                     
                     # Add the whole block to your main container
-                    container.addWidget(joint_block_widget)     
-            
-    # def onloadbutton(self) -> None:
-        
-    #     # Get robot node
-    #     robotNode = self.ui.ikrobotcombobox.currentNode()
-        
-    #     # check if sphere model already exists (slicer.util.getNode raises if not found)
-    #     try:
-    #         model = slicer.util.getNode("ProbeSphere")
-    #     except slicer.util.MRMLNodeNotFoundException:
-    #         model = None
-
-    #     if model is not None:
-    #         print("Sphere model already exists.")
-    #         # Get linear transform into self.fromtransform
-    #         self.fromtransform = slicer.util.getNode("ProbeSphere_Transform")
-            
-    #         # Reset to zero position
-    #         identity_matrix = vtk.vtkMatrix4x4()
-    #         identity_matrix.Identity()
-    #         self.fromtransform.SetMatrixTransformToParent(identity_matrix)
-    #         print("Reset sphere transform to identity.")
-            
-    #         # Get ros2 root into self.totransform
-    #         self.totransform = self.logic.findRos2Root()
-    #     else:
-    #         print("Creating sphere model...")
-    #         model = self.logic.createSphereModel()
-    #         self.fromtransform = self.logic.createLinearTransform()
-
-    #         self.logic.applyTransformToModel(model, self.fromtransform)
-    #         self.totransform = self.logic.findRos2Root()
-    #         print(f"Found ros2 root transform: {self.totransform.GetName()}")
-        
-    #     ikgroup = self.ui.grouplineEdit.text
-    #     self.robot = self.logic.setupikforRobot(group=ikgroup, robotNode=robotNode, fromtransformname=self.fromtransform.GetName(), totransformname=self.totransform.GetName())
-
-    #     # Parse URDF to get joint names
-    #     # Get URDF XML from robot parameter node
-    #     pnode = robotNode.GetNthNodeReference("parameter", 0)
-    #     urdf_xml = pnode.GetParameterAsString("robot_description")
-        
-    #     # Parse joint names and store in logic
-    #     joint_names = self.logic.parse_joint_names_from_urdf(urdf_xml)
-    #     self.logic.joint_names = joint_names  # Store for publishing
-    #     limits = self.logic.parse_joint_limits_from_urdf(urdf_xml)
-
-    #     self.ui.jointCollapsibleButton.collapsed = False        
-    #     self.ui.jointCollapsibleButton.enabled = True
-        
-    #     container = self.ui.jointScrollContents.layout()
-        
-    #     if container is not None:
-    #         # Clear existing widgets
-    #         while container.count():
-    #             item = container.takeAt(0)
-    #             widget = item.widget()
-    #             if widget is not None:
-    #                 widget.deleteLater()
-
-    #         # Create sliders dynamically based on joint names
-    #         for i, joint_name in enumerate(joint_names):
-    #             joint_label = qt.QLabel(joint_name)
-    #             joint_slider = qt.QSlider(qt.Qt.Horizontal)
-
-    #             # Apply limits from URDF (convert radians to degrees)
-    #             lo_hi = limits.get(joint_name)
-    #             if lo_hi:
-    #                 lo_deg = int(round(math.degrees(lo_hi[0])))
-    #                 hi_deg = int(round(math.degrees(lo_hi[1])))
-    #                 if lo_deg > hi_deg:
-    #                     lo_deg, hi_deg = hi_deg, lo_deg
-    #             else:
-    #                 lo_deg, hi_deg = -180, 180
-
-    #             joint_slider.setMinimum(lo_deg)
-    #             joint_slider.setMaximum(hi_deg)
-    #             joint_slider.setValue(0)
-    #             joint_slider.setTickInterval(10)
-    #             joint_slider.setTickPosition(qt.QSlider.TicksBelow)
-
-    #             # Connect slider change to handler
-    #             joint_slider.valueChanged.connect(lambda value, idx=i: self.onJointSliderChanged(idx, value))
-
-    #             # Add to layout
-    #             container.addWidget(joint_label)
-    #             container.addWidget(joint_slider)
-            
-    #         # Resize jointPositionsRad to match actual joint count
-    #         self.jointPositionsRad = [0.0] * len(joint_names)
-        
-        
-    # def onstreamstartbutton(self) -> None:
-    #         robotmodel = self.robot
-    #         ikgroup = self.ui.grouplineEdit.text
-            
-    #         if robotmodel is None:
-    #             print("Robot model is not set up.")
-    #             return
-
-    #         # 1. Find the deepest model (e.g. "tool0_model")
-    #         deepest_model = self.logic.findDeepestModel()
-            
-    #         ee_name = ""
-            
-    #         if deepest_model:
-    #             raw_model_name = deepest_model.GetName()
-                
-    #             # 2. Derive Link Name: Simply strip "_model"
-    #             # "tool0_model" -> "tool0"
-    #             if raw_model_name.endswith("_model"):
-    #                 ee_name = raw_model_name[:-6]
-    #             else:
-    #                 ee_name = raw_model_name
+                    container.addWidget(joint_block_widget)
                     
-    #             print(f"Deepest Model: {raw_model_name}")
-    #             print(f"End-Effector Target: {ee_name}")
-
-    #         else:
-    #             print("Could not find any robot models.")
-    #             return
-
-    #         # 3. Start Streaming
-    #         self.logic.addObserverComputeIK(ee_name, robotmodel, ikgroup)
-
-    # Button to allow 3d control of end-effector position
-    def onstreamstartbutton(self) -> None:
-            robotmodel = self.robot
+            self.isRobotLoaded = True
             
-            if robotmodel is None:
-                print("Robot model is not set up.")
-                return
-            print("Started 3D Control...")
-            # Add observer to compute IK on transform changes
-            self.logic.addObserverComputeIK(robotmodel)
-    
-    # Button to stop 3d control of end-effector position
-    def onstreamstopbutton(self) -> None:
-        self.logic.removeObserver()
-        print("Stopped 3D Control")
+            if self.ui.tabWidget.currentWidget() == self.ui.controltab:
+                self.enterControlMode()
 
     # Opacity button handler        
     def onopacitybutton(self) -> None:
@@ -682,6 +527,10 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             self.ui.moveCollapsibleButton.enabled = False
             
     def onTabChanged(self, index):
+            if not self.isRobotLoaded:
+                print("Robot not loaded yet; ignoring tab change.")
+                return
+            
             # 1. Get the widget that is currently visible
             current_widget = self.ui.tabWidget.widget(index)
             
@@ -689,40 +538,90 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             if current_widget == self.ui.controltab:
                 print("Detected: controltab is now OPEN")
                 # Call your start function here
-                # self.enterControlMode()
+                self.enterControlMode()
                 
             else:
                 print("Detected: controltab is now HIDDEN (User went somewhere else)")
-                self.cleanupControlFeatures()
+                self.exitControlMode()
 
-    def cleanupControlFeatures(self):
-        """Safely removes observer and models. Safe to call multiple times."""
+    def enterControlMode(self):
+            # 1. Check if Robot is Loaded
+            if not self.isRobotLoaded: return
+            if not self.robot or not self.rootlink: return
+
+            print(">> Enter Control Mode: Creating Sphere & Starting IK...")
+
+            # 2. Find Robot Root Transform (Target for IK calculation)
+            try:
+                self.totransform = self.logic.findRobotTransforms(self.rootlink)
+            except RuntimeError:
+                print("Error: Could not find robot root transform.")
+                return
+
+            # 3. Create Sphere (Probe) if missing
+            try:
+                model = slicer.util.getNode("ProbeSphere")
+            except slicer.util.MRMLNodeNotFoundException:
+                model = None
+
+            if model is None:
+                model = self.logic.createSphereModel()
+                self.fromtransform = self.logic.createLinearTransform()
+                self.logic.applyTransformToModel(model, self.fromtransform)
+            else:
+                self.fromtransform = slicer.util.getNode("ProbeSphere_Transform")
+
+            # --- NEW: Snap Sphere to Tip Position ---
+            # We try to find the current transform of the tip link so the sphere 
+            # doesn't jump to (0,0,0) causing the robot to fold up.
+            try:
+                # Use your logic helper to find the transform node for the tip link
+                tip_transform_node = self.logic.findRobotTransforms(self.ghosttiplink)
+                
+                if tip_transform_node:
+                    # 1. Get the matrix of the tip in World coordinates
+                    tipMatrix = vtk.vtkMatrix4x4()
+                    tip_transform_node.GetMatrixTransformToWorld(tipMatrix)
+                    
+                    # 2. Apply that matrix to our Probe Sphere
+                    self.fromtransform.SetMatrixTransformToParent(tipMatrix)
+                    print(f"Snapped ProbeSphere to robot tip: {self.ghosttiplink}")
+                    
+            except Exception as e:
+                # If this fails (e.g. tip link has no visual model), we just warn and continue.
+                # The sphere will spawn at (0,0,0) or its last known location.
+                print(f"Warning: Could not snap sphere to tip. (Tip link '{self.ghosttiplink}' might have no visual model). Error: {e}")
+            # ----------------------------------------
+
+            # 4. LINK VISUALS TO LOGIC
+            self.logic.setIKSourceTransforms(
+                self.fromtransform.GetName(), 
+                self.totransform.GetName()
+            )
+            
+            # 5. START OBSERVER
+            self.logic.addObserverComputeIK(self.robot)
+            
+    def exitControlMode(self):
+        if not self.isRobotLoaded: return
         
-        # A. Remove Observer
-        # (Your logic class already has this, but good to call it here)
+        print(">> Exit Control Mode: Stopping IK & Cleaning up...")
+        
+        # 1. Stop Observer (Stop calculating IK)
+        # This effectively replaces the "Stop" button
         if self.logic:
             self.logic.removeObserver()
-
-        # B. Delete the Sphere Model (Safely)
+        
+        # 2. Delete Sphere Transform
+        if self.fromtransform:
+            slicer.mrmlScene.RemoveNode(self.fromtransform)
+            self.fromtransform = None
+        
+        # 3. Delete Sphere Model
         try:
-            # Try to find the node by name
             model = slicer.util.getNode("ProbeSphere")
-            if model:
-                slicer.mrmlScene.RemoveNode(model)
-                print("   ProbeSphere deleted.")
-        except slicer.util.MRMLNodeNotFoundException:
-            # If it's already gone, do nothing (pass)
-            pass
-
-        # C. Delete the Transform (Safely)
-        try:
-            # We use the variable self.fromtransform if you stored it
-            if self.fromtransform:
-                slicer.mrmlScene.RemoveNode(self.fromtransform)
-                self.fromtransform = None
-                print("   ProbeSphere_Transform deleted.")
-        except Exception:
-            pass
+            if model: slicer.mrmlScene.RemoveNode(model)
+        except: pass
     
 
 #
@@ -859,18 +758,6 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
 
         print(f"Attached '{probeTransformName}' under leaf transform '{leaf.GetName()}'")
         return dict(leafTransform=leaf, probeTransform=probeT)
-
-    # def findRos2Root(self, prefix="ros2:tf2lookup:"):
-    #     s = slicer.mrmlScene
-    #     ts = [s.GetNthNodeByClass(i,"vtkMRMLTransformNode")
-    #         for i in range(s.GetNumberOfNodesByClass("vtkMRMLTransformNode"))]
-    #     ts = [t for t in ts if t.GetName().startswith(prefix)]
-    #     if not ts:
-    #         raise RuntimeError(f"No transforms with prefix '{prefix}' found.")
-    #     subset = set(ts)
-    #     roots = [t for t in ts if t.GetParentTransformNode() not in subset]
-    #     return roots[0]  # the top-most (your “first ros2 tf lookup”)
-    
     
     def findRobotTransforms(self, link_name):
         """
@@ -963,113 +850,7 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
         rosNode = rosLogic.GetDefaultROS2Node()
         
         return rosNode.CreateAndAddPublisherNode("JointState", topic)
-        
-    # def setupikforRobot(self, group, robotNode, fromtransformname, totransformname):
-    #     if group:
-    #         self.plangroup = group
-    #         print(f"Set IK group to '{group}'")
-    #     else:
-    #         raise RuntimeError("IK group name is required.")
-        
-    #     fromNode = slicer.util.getNode(fromtransformname)
-    #     toNode   = slicer.util.getNode(totransformname)
-        
-    #     if fromNode is None or toNode is None:
-    #         raise RuntimeError("Transform nodes not found.")
-    #     else:
-    #         self.obsNode = fromNode
-    #         self.toNode = toNode
-    #         print(f"Nodes set for IK: from '{fromtransformname}' to '{totransformname}'")
-        
-    #     bool = robotNode.setupIK(group)
-        
-    #     self.joint_state_publisher = self.getOrReusePublisher("/ghost/joint_states")
-        
-    #     # Initialize IK solution seed with correct size
-    #     if self.joint_names:
-    #         self.last_ik_solution = [0.0] * len(self.joint_names)
-        
-    #     if bool:
-    #         print(f"IK setup for robot '{robotNode.GetName()}' and group '{group}' successful.")
-    #         return robotNode
-    #     else:
-    #         raise RuntimeError(f"IK setup for robot '{robotNode.GetName()}' and group '{group}' failed.")
     
-    
-    def setupikforRobot(self, root_link, tip_link, robotNode, fromtransformname, totransformname):
-        """
-        Sets up KDL IK for the robot.
-        Args:
-            root_link (str): The name of the base link (e.g., 'base_link')
-            tip_link (str): The name of the end-effector link (e.g., 'tool0')
-            robotNode: The vtkMRMLROS2RobotNode instance
-            fromtransformname: Name of the transform node moving the robot
-            totransformname: Name of the reference transform node
-        """
-        if not root_link or not tip_link:
-             raise RuntimeError("Both Root Link and Tip Link names are required for KDL.")
-
-        # Setup internal node references for the dragging logic
-        fromNode = slicer.util.getNode(fromtransformname)
-        toNode   = slicer.util.getNode(totransformname)
-        
-        if fromNode is None or toNode is None:
-            raise RuntimeError("Transform nodes not found.")
-        else:
-            self.obsNode = fromNode
-            self.toNode = toNode
-            print(f"Nodes set for IK: from '{fromtransformname}' to '{totransformname}'")
-        
-        # Call the new C++ KDL method instead of the old MoveIt setupIK
-        # This returns True if the chain was successfully built from URDF
-        success = robotNode.setupKDLIKWithLimits(root_link, tip_link)
-        # ----------------------
-        
-        self.joint_state_publisher = self.getOrReusePublisher("/ghost/joint_states")
-        
-        # Initialize IK solution seed
-        # Note: Ensure self.joint_names is populated before this call 
-        # (usually done by parsing URDF)
-        if hasattr(self, 'joint_names') and self.joint_names:
-            self.last_ik_solution = [0.0] * len(self.joint_names)
-        
-        if success:
-            print(f"KDL IK setup for robot '{robotNode.GetName()}' (Chain: {root_link} -> {tip_link}) successful.")
-            return robotNode
-        else:
-            raise RuntimeError(f"KDL IK setup failed. Could not build chain from '{root_link}' to '{tip_link}'.")
-        
-    # def compute_ik_once(self, endeffectorname: str, robotmodel=None, ikgroup=None):
-
-    #     # --- Get Slicer transform nodes ---
-    #     fromNode = self.obsNode
-    #     toNode   = self.toNode
-
-    #     # --- Compute 4×4 transform between nodes ---
-    #     targetPose = vtk.vtkMatrix4x4()
-    #     if not slicer.vtkMRMLTransformNode.GetMatrixTransformBetweenNodes(fromNode, toNode, targetPose):
-    #         raise RuntimeError("Could not compute transform between nodes.")
-        
-    #     seed = self.last_ik_solution
-    #     result_str = robotmodel.FindIK(ikgroup, targetPose, endeffectorname, seed, 0.05)
-
-    #     if result_str and result_str.strip():
-    #         # Parse comma-separated string into list of floats
-    #         try:
-    #             data = [float(x) for x in result_str.split(",")]
-
-    #             print(f"[IK] Joint Solution: {data}")
-    #             self.last_ik_solution = data
-    #             # Publish the joint state solution
-    #             self._publish_joint_state(data)
-    #             return data
-            
-    #         except ValueError as e:
-    #             print(f"[IK] Failed to parse solution: {e}")
-    #             return None
-    #     else:
-    #         print(f"[IK] Empty result from FindIK")
-    #         return None
     
     def compute_ik_once(self, robotmodel):
             # robotmodel is required because we need to call robotmodel.FindKDLIK()
@@ -1160,37 +941,6 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
                 self.joint_state_publisher.Publish(jsmsg)
             except Exception as e:
                 print(f"[IK] Failed to publish joint state: {e}")
-
-    
-    # def addObserverComputeIK(self, endeffectorname: str, robotmodel=None, ikgroup=None):
-    #     """
-    #     Observe transform changes. Uses self.obsNode and self.toNode that should be
-    #     set by setupikforRobot(). Each transform update triggers IK computation.
-    #     """
-    #     fromNode = self.obsNode
-    #     toNode   = self.toNode
-        
-    #     if fromNode is None or toNode is None:
-    #         raise RuntimeError("Transform nodes not found. Call setupikforRobot() first.")
-        
-    #     # Remove previous observer if any (but don't clear node references)
-    #     if self.obsTag and self.obsNode:
-    #         try:
-    #             self.obsNode.RemoveObserver(self.obsTag)
-    #         except Exception:
-    #             pass
-    #         self.obsTag = None
-
-    #     def onModified(caller, eventId):
-    #         # Trigger IK compute
-    #         self.compute_ik_once(endeffectorname=endeffectorname, robotmodel=robotmodel, ikgroup=ikgroup)
-
-
-    #     self.callback = onModified
-    #     eventId = slicer.vtkMRMLTransformNode.TransformModifiedEvent
-    #     self.obsTag  = fromNode.AddObserver(eventId, self.callback)
-
-    #     return self.obsTag
     
     
     def addObserverComputeIK(self, robotmodel=None):
@@ -1338,6 +1088,21 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
             slider.setValue(0)
 
             print(f"[RoboDrag] {jointName}: {lo_deg}..{hi_deg} deg")
+            
+    def setIKSourceTransforms(self, fromtransformname, totransformname):
+            """
+            Links the specific visual nodes (Sphere Transform -> Robot Root Transform)
+            so the observer knows what to calculate IK for.
+            """
+            fromNode = slicer.util.getNode(fromtransformname)
+            toNode   = slicer.util.getNode(totransformname)
+            
+            if fromNode and toNode:
+                self.obsNode = fromNode
+                self.toNode = toNode
+                print(f"Logic Linked: '{fromtransformname}' -> '{totransformname}'")
+            else:
+                print("Error: Could not link IK transforms (Nodes missing)")
             
 
 
