@@ -4,6 +4,8 @@ from typing import Annotated, Optional
 import xml.etree.ElementTree as ET
 import math
 import qt
+import json
+from ROS2Tests import ROS2TestsLogic  
 
 import vtk
 
@@ -156,6 +158,10 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.tiplink = None
         self.ghosttiplink = None
         self.isRobotLoaded = False
+        self.trajectoryTimer = None
+        self.trajectoryData = None
+        self.trajectoryIndex = 0
+        self.trajectorySlider = None
 
     def setup(self) -> None:
         """Called when the user opens the module the first time and the widget is initialized."""
@@ -190,22 +196,28 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.ui.robotColorButton.connect("colorChanged(QColor)", self.onRobotColorChanged)
         self.ui.zeropushButton.connect("clicked(bool)", self.onzerobutton)
         self.ui.checkBox.connect("toggled(bool)", self.onMoveGroupToggled)
+        self.ui.planbutton.connect("clicked(bool)", self.onPlanButton)
+        self.ui.previewbutton.connect("clicked(bool)", self.onpreviewButton)
+        self.ui.executebutton.connect("clicked(bool)", self.onExecuteButton)    
                 
         # Set appearence collapsible button to be collapsed and disabled initially
         self.ui.appCollapsibleButton.collapsed = True
         self.ui.appCollapsibleButton.enabled = False
-        
-        # Set checkbox for move group option. If toggled, enable moveCollapsibleButton and uncollapse
-        # if toggled off, disable moveCollapsibleButton and collapse
-        self.ui.moveCollapsibleButton.collapsed = True
-        self.ui.moveCollapsibleButton.enabled = False
         self.ui.checkBox.enabled = False
+        self.ui.planbutton.enabled = False
+        self.ui.previewbutton.enabled = False
+        self.ui.executebutton.enabled = False
+        self.ui.plangroup.enabled = False
+        self.ui.plangroupline.enabled = False
         
         # Make sure parameter node is initialized (needed for module reload)
         self.initializeParameterNode()
 
     def cleanup(self) -> None:
         """Called when the application closes and the module widget is destroyed."""
+        # Stop trajectory animation if running
+        if self.trajectoryTimer:
+            self.trajectoryTimer.stop()
         # Stop streaming and remove observers before cleanup
         if self.logic:
             self.logic.removeObserver()
@@ -310,7 +322,6 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 print("Error: No parameter node found for robot.")
                 return
             urdf_xml = pnode.GetParameterAsString("robot_description")
-            print(urdf_xml)
 
             # Auto-detect Root and Tip Links
             alllink = self.logic.parse_all_link_names_from_urdf(urdf_xml)
@@ -322,8 +333,23 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             self.robot = robotNode
             self.rootlink = alllink[0] 
             self.tiplink = alllink[-1]
-            self.ghosttiplink =  self.tiplink + "_model_ghost"
-            # Print tip link and ghost tip link
+            print(f"CURRENT: rootlink={self.rootlink}, tiplink={self.tiplink}")
+            
+            # Check if ghost tip link exists
+            ghost_name = self.tiplink + "_model_ghost"
+            try:
+                ghost_model = slicer.util.getNode(ghost_name)
+                ghost_loaded = ghost_model is not None and ghost_model.GetParentTransformNode() is not None
+                if ghost_loaded:
+                    self.ghosttiplink = ghost_name
+                    print(f"Ghost robot loaded: True")
+                else:
+                    self.ghosttiplink = None
+                    print(f"Ghost robot NOT loaded (no parent transform)")
+            except slicer.util.MRMLNodeNotFoundException:
+                self.ghosttiplink = None
+                print(f"Ghost robot NOT loaded (model '{ghost_name}' not found)")
+            
             print(f"Tip Link: {self.tiplink}, Ghost Tip Link: {self.ghosttiplink}")
 
             # Check if links were found
@@ -332,21 +358,43 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 return
             print(f"Auto-detected Chain for IK: {self.rootlink} -> {self.tiplink}")
             
+            currentjointpos =self.logic.getcurrentjointpositions(robotNode)
+            print(f"Current Joint Positions (rad): {[f'{j:.4f}' for j in currentjointpos]}")
+            
             # Get joint names
             joint_names = robotNode.GetJoints()
             self.logic.joint_names = joint_names
-            self.logic.last_ik_solution = [0.0] * len(joint_names)
+            self.logic.last_ik_solution = currentjointpos
             self.jointPositionsRad = [0.0] * len(joint_names)
             
-            # Establish ROS 2 Publisher for Joint States
-            self.logic.joint_state_publisher = self.logic.getOrReusePublisher("/ghost/joint_states")
-            print("ROS 2 Publisher initialized on /ghost/joint_states")
+            # DEBUG: Confirm joint names and seed match
+            print(f"\n=== JOINT CONFIGURATION ===")
+            print(f"Joint Names: {list(joint_names)}")
+            print(f"Joint Count: {len(joint_names)}")
+            print(f"Seed Vector: {[f'{j:.4f}' for j in currentjointpos]}")
+            print(f"Seed Length: {len(currentjointpos)}")
+            print(f"Match: {len(joint_names) == len(currentjointpos)}")
+            print(f"All Seed Values in Radians? (should be near 0): {currentjointpos}")
+            print(f"===========================\n")
             
             # Enable buttons
             self.ui.zeropushButton.enabled = True
             self.ui.appCollapsibleButton.collapsed = False
             self.ui.appCollapsibleButton.enabled = True
-            self.ui.checkBox.enabled = True
+            
+            # Check if /move_group node exists and ghost robot in ROS
+            # if so enable MoveIt buttons
+            is_running = ROS2TestsLogic.check_ros2_node_running("/move_group")
+            if is_running and self.ghosttiplink is not None:
+                self.ui.planbutton.enabled = True
+                self.ui.previewbutton.enabled = True
+                self.ui.checkBox.enabled = True
+                self.ui.plangroup.enabled = True
+                self.ui.plangroupline.enabled = True
+                print(f"/move_group node is running")
+                print(f"User must enter planning group name before using MoveIt IK")
+            else:
+                print(f"/move_group node is NOT running or no ghost robot loaded")
             
             # Create Joint Sliders Dynamically
             limits = self.logic.parse_joint_limits_from_urdf(urdf_xml)
@@ -459,10 +507,9 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         # store as radians
         self.jointPositionsRad[idx] = math.radians(valueDeg)
 
-        # publish all joint values
-        if self.logic is not None and self.logic.joint_state_publisher is not None:
-            # self.logic._publish_joint_state(self.jointPositionsRad)
-            self.robot.ApplyGhostJoints(self.jointPositionsRad)
+        # Update ghost robot transforms with new joint positions
+        if self.logic is not None and self.robot is not None:
+            self.logic.updateGhostTransformsFromJoints(self.robot, self.jointPositionsRad)
         
         print(f"All joint values (rad): {[f'{j:.4f}' for j in self.jointPositionsRad]}")
     
@@ -515,18 +562,22 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         # Reset stored joint positions to match slider count
         self.jointPositionsRad = [0.0] * len(sliders_found)
 
-        # Publish zero positions once at the end
-        if self.logic is not None and self.logic.joint_state_publisher is not None:
-            # self.logic._publish_joint_state(self.jointPositionsRad)
-            self.robot.ApplyGhostJoints(self.jointPositionsRad)
+        # Update ghost robot with zero positions
+        if self.logic is not None and self.robot is not None:
+            self.logic.updateGhostTransformsFromJoints(self.robot, self.jointPositionsRad)
 
     def onMoveGroupToggled(self, toggled: bool) -> None:
         if toggled:
-            self.ui.moveCollapsibleButton.collapsed = False
-            self.ui.moveCollapsibleButton.enabled = True
+            print("Enabling MoveIt IK")
+            self.logic.useMoveItIK = True
+            
+            if self.ui.plangroupline.text == "":
+                print("Warning: No MoveIt planning group specified.")
+            self.robot.setupIKmoveit(self.ui.plangroupline.text)
         else:
-            self.ui.moveCollapsibleButton.collapsed = True
-            self.ui.moveCollapsibleButton.enabled = False
+            print("Disabling MoveIt IK")
+            self.logic.useMoveItIK = False
+
             
     def onTabChanged(self, index):
             if not self.isRobotLoaded:
@@ -547,62 +598,78 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 self.exitControlMode()
 
     def enterControlMode(self):
-            # 1. Check if Robot is Loaded
-            if not self.isRobotLoaded: return
-            if not self.robot or not self.rootlink: return
+                # 1. Check if Robot is Loaded
+                if not self.isRobotLoaded: return
+                if not self.robot or not self.rootlink: return
 
-            print(">> Enter Control Mode: Creating Sphere & Starting IK...")
+                print(">> Enter Control Mode: Creating Sphere & Starting IK...")
 
-            # 2. Find Robot Root Transform (Target for IK calculation)
-            try:
-                self.totransform = self.logic.findRobotTransforms(self.rootlink)
-            except RuntimeError:
-                print("Error: Could not find robot root transform.")
-                return
+                # 2. Find Robot Root Transform (Target for IK calculation)
+                try:
+                    self.totransform = self.logic.findRobotTransforms(self.rootlink)
+                except RuntimeError:
+                    print("Error: Could not find robot root transform.")
+                    return
 
-            # 3. Create Sphere (Probe) if missing
-            try:
-                model = slicer.util.getNode("ProbeSphere")
-            except slicer.util.MRMLNodeNotFoundException:
-                model = None
+                # 3. Create Sphere (Probe) if missing
+                try:
+                    model = slicer.util.getNode("ProbeSphere")
+                except slicer.util.MRMLNodeNotFoundException:
+                    model = None
 
-            if model is None:
-                model = self.logic.createSphereModel()
-                self.fromtransform = self.logic.createLinearTransform()
-                self.logic.applyTransformToModel(model, self.fromtransform)
-            else:
-                self.fromtransform = slicer.util.getNode("ProbeSphere_Transform")
+                if model is None:
+                    model = self.logic.createSphereModel()
+                    self.fromtransform = self.logic.createLinearTransform()
+                    self.logic.applyTransformToModel(model, self.fromtransform)
+                else:
+                    self.fromtransform = slicer.util.getNode("ProbeSphere_Transform")
 
-            # --- NEW: Snap Sphere to Tip Position ---
-            # We try to find the current transform of the tip link so the sphere 
-            # doesn't jump to (0,0,0) causing the robot to fold up.
-            try:
-                # Use your logic helper to find the transform node for the tip link
-                tip_transform_node = self.logic.findRobotTransforms(self.ghosttiplink, ghost=True)
+                # --- UPDATED: SNAP SPHERE TO TIP ON START ---
+                # This aligns the probe (Pos + Rot) with the robot immediately, 
+                # solving the "Impossible Orientation" issue at startup.
+                try:
+                    # A. Decide which tip to follow: Ghost (Preferred) -> Real (Fallback)
+                    target_tip_link = self.ghosttiplink if self.ghosttiplink else self.tiplink
+                    use_ghost = (target_tip_link == self.ghosttiplink)
+
+                    if target_tip_link:
+                        # B. Find the Transform Node
+                        tip_transform_node = self.logic.findRobotTransforms(target_tip_link, ghost=use_ghost)
+                        
+                        if tip_transform_node:
+                            # C. Get the Full 4x4 Matrix (Pos + Rot) in World Coordinates
+                            tipMatrix = vtk.vtkMatrix4x4()
+                            tip_transform_node.GetMatrixTransformToWorld(tipMatrix)
+                            
+                            # D. Apply to Probe
+                            self.fromtransform.SetMatrixTransformToParent(tipMatrix)
+                            print(f"✅ Snapped Probe Pose to {target_tip_link} (Pos + Rot)")
+                            
+                            # DEBUG check
+                            # print(f"   Initial Rot: {tipMatrix.GetElement(0,0):.2f}...")
+                    else:
+                        print("Warning: No tip link found to snap to.")
+                        
+                except Exception as e:
+                    print(f"Warning: Could not snap sphere to tip. Error: {e}")
+                # ----------------------------------------
+
+                # 4. LINK VISUALS TO LOGIC
+                self.logic.setIKSourceTransforms(
+                    self.fromtransform.GetName(), 
+                    self.totransform.GetName()
+                )
                 
-                if tip_transform_node:
-                    # 1. Get the matrix of the tip in World coordinates
-                    tipMatrix = vtk.vtkMatrix4x4()
-                    tip_transform_node.GetMatrixTransformToWorld(tipMatrix)
-                    
-                    # 2. Apply that matrix to our Probe Sphere
-                    self.fromtransform.SetMatrixTransformToParent(tipMatrix)
-                    print(f"Snapped ProbeSphere to robot tip: {self.ghosttiplink}")
-                    
-            except Exception as e:
-                # If this fails (e.g. tip link has no visual model), we just warn and continue.
-                # The sphere will spawn at (0,0,0) or its last known location.
-                print(f"Warning: Could not snap sphere to tip. (Tip link '{self.ghosttiplink}' might have no visual model). Error: {e}")
-            # ----------------------------------------
-
-            # 4. LINK VISUALS TO LOGIC
-            self.logic.setIKSourceTransforms(
-                self.fromtransform.GetName(), 
-                self.totransform.GetName()
-            )
-            
-            # 5. START OBSERVER
-            self.logic.addObserverComputeIK(self.robot)
+                # 5. PASS TIP LINK TO LOGIC
+                print(f"\n=== TIP LINK CONFIGURATION ===")
+                print(f"rootlink (base): {self.rootlink}")
+                print(f"tiplink (target): {self.tiplink}")
+                print(f"ghosttiplink: {self.ghosttiplink}")
+                print(f"================================\n")
+                self.logic.tipLink = self.tiplink
+                
+                # 6. START OBSERVER
+                self.logic.addObserverComputeIK(self.robot)
             
     def exitControlMode(self):
         if not self.isRobotLoaded: return
@@ -624,6 +691,143 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             model = slicer.util.getNode("ProbeSphere")
             if model: slicer.mrmlScene.RemoveNode(model)
         except: pass
+
+    def onPlanButton(self) -> None:
+        sol = self.robot.PlanMoveItTrajectoryJSON(self.ui.plangroupline.text,self.logic.last_ik_solution)
+        print(f"Plan button clicked - received solution: {sol}")
+        
+        # Parse and store the trajectory
+        if sol:
+            self.ui.previewbutton.enabled = True
+            self.ui.executebutton.enabled = True
+            try:
+                trajectory = json.loads(sol)
+                if "points" in trajectory:
+                    self.trajectoryData = trajectory
+                    num_points = len(trajectory['points'])
+                    print(f"Trajectory stored with {num_points} points")
+                    
+                    # Remove old slider if it exists
+                    if self.trajectorySlider:
+                        if self.trajectorySliderWidget:
+                            self.trajectorySliderWidget.deleteLater()
+                        self.trajectorySlider = None
+                        self.trajectorySliderWidget = None
+                        self.trajectorySpinBox = None
+                    
+                    # Create new trajectory scrubber slider
+                    self.trajectorySliderWidget = qt.QWidget()
+                    layout = qt.QVBoxLayout(self.trajectorySliderWidget)
+                    layout.setContentsMargins(0, 10, 0, 0)
+                    
+                    # Create label
+                    label = qt.QLabel("Trajectory Scrubber:")
+                    layout.addWidget(label)
+                    
+                    # Create horizontal layout for slider and spinbox
+                    sliderLayout = qt.QHBoxLayout()
+                    
+                    # Create slider
+                    self.trajectorySlider = qt.QSlider(qt.Qt.Horizontal)
+                    self.trajectorySlider.setMinimum(0)
+                    self.trajectorySlider.setMaximum(num_points - 1)
+                    self.trajectorySlider.setValue(0)
+                    self.trajectorySlider.valueChanged.connect(self.onTrajectorySliderChanged)
+                    sliderLayout.addWidget(self.trajectorySlider)
+                    
+                    # Create spinbox to show point number
+                    self.trajectorySpinBox = qt.QSpinBox()
+                    self.trajectorySpinBox.setMinimum(0)
+                    self.trajectorySpinBox.setMaximum(num_points - 1)
+                    self.trajectorySpinBox.setValue(0)
+                    self.trajectorySpinBox.setSuffix(f" / {num_points - 1}")
+                    self.trajectorySpinBox.valueChanged.connect(lambda val: self.trajectorySlider.setValue(val))
+                    sliderLayout.addWidget(self.trajectorySpinBox)
+                    
+                    layout.addLayout(sliderLayout)
+                    
+                    # Add to the moveittab layout
+                    moveitLayout = self.ui.moveittab.layout()
+                    if moveitLayout:
+                        moveitLayout.addWidget(self.trajectorySliderWidget)
+                    
+                    # Show first point of trajectory
+                    if self.robot and num_points > 0:
+                        positions = trajectory['points'][0]['positions']
+                        self.logic.updateGhostTransformsFromJoints(self.robot, positions)
+                else:
+                    print("Error: No points found in trajectory")
+            except json.JSONDecodeError as e:
+                print(f"Error parsing trajectory JSON: {e}")
+        
+    def onpreviewButton(self) -> None:
+        """Preview the planned trajectory on the ghost robot"""
+        if not self.trajectoryData:
+            print("No trajectory to preview. Run Plan first.")
+            return
+        
+        # Stop any existing animation
+        if self.trajectoryTimer:
+            self.trajectoryTimer.stop()
+        
+        # Start animating the trajectory
+        self.trajectoryIndex = 0
+        self.trajectoryTimer = qt.QTimer()
+        self.trajectoryTimer.timeout.connect(self.animateTrajectoryStep)
+        self.trajectoryTimer.start(50)  # Update every 50ms
+        print(f"Starting trajectory preview with {len(self.trajectoryData['points'])} points")
+    
+    def animateTrajectoryStep(self):
+        """Animate one step of the trajectory"""
+        if not self.trajectoryData or self.trajectoryIndex >= len(self.trajectoryData['points']):
+            # Animation complete
+            if self.trajectoryTimer:
+                self.trajectoryTimer.stop()
+            print("Trajectory preview complete")
+            return
+        
+        # Get current point
+        point = self.trajectoryData['points'][self.trajectoryIndex]
+        positions = point['positions']
+        
+        # Apply to ghost robot
+        if self.robot:
+            self.logic.updateGhostTransformsFromJoints(self.robot, positions)
+            print(f"Point {self.trajectoryIndex}/{len(self.trajectoryData['points'])-1}: {[f'{p:.3f}' for p in positions]}")
+        
+        self.trajectoryIndex += 1
+    
+    def onTrajectorySliderChanged(self, value):
+        """Called when trajectory slider is moved"""
+        if not self.trajectoryData or not self.robot:
+            return
+        
+        # Stop any running animation
+        if self.trajectoryTimer:
+            self.trajectoryTimer.stop()
+        
+        # Get the trajectory point at this index
+        if 0 <= value < len(self.trajectoryData['points']):
+            point = self.trajectoryData['points'][value]
+            positions = point['positions']
+            
+            # Apply to ghost robot
+            self.logic.updateGhostTransformsFromJoints(self.robot, positions)
+            
+            # Update spinbox if it's not the source of the change
+            if self.trajectorySpinBox.value != value:
+                self.trajectorySpinBox.blockSignals(True)
+                self.trajectorySpinBox.setValue(value)
+                self.trajectorySpinBox.blockSignals(False)
+                
+    def onExecuteButton(self) -> None:
+        success = self.robot.ExecuteCachedMoveItTrajectory(self.ui.plangroupline.text)
+        
+        if success:
+            print("Execute command sent successfully.")
+        else:
+            print("Failed to send execute command.")
+        
     
 
 #
@@ -649,9 +853,11 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
         self.callback = None  
         self.toNode = None
         self.plangroup = None
+        self.tipLink = None  # Will be set from widget
         self.last_ik_solution = []  # Will be sized based on actual joint count
         self.joint_names = []  # Will be populated from URDF
         self.joint_state_publisher = None
+        self.useMoveItIK = False  # Flag to toggle between KDL and MoveIt IK
         
     def getParameterNode(self):
         return RoboDragParameterNode(super().getParameterNode())
@@ -835,38 +1041,57 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
         self.obsNode = None
         self.obsTag = None
         self.callback = None
+    
+    
+    def computeIKWithMoveIt(self, robotmodel, tipLink):
 
-    def getOrReusePublisher(self, topic="/ghost/joint_states"):
-        pubs = slicer.util.getNodesByClass("vtkMRMLROS2PublisherNode")
-        # getNodesByClass might be list or dict depending on Slicer version
-        if isinstance(pubs, dict):
-            pubs = list(pubs.values())
-
-        for p in pubs:
-            # method name varies by build; try both
-            if hasattr(p, "GetTopicName") and p.GetTopicName() == topic:
-                print("Reusing existing publisher for topic:", topic)
-                return p
-            if hasattr(p, "GetTopic") and p.GetTopic() == topic:
-                print("Reusing existing publisher for topic:", topic)
-                return p
-
-        print("Creating new publisher for topic:", topic)
-        rosLogic = slicer.util.getModuleLogic("ROS2")
-        rosNode = rosLogic.GetDefaultROS2Node()
+    # --- Get Slicer transform nodes ---
+        fromNode = self.obsNode
+        toNode   = self.toNode
         
-        return rosNode.CreateAndAddPublisherNode("JointState", topic)
+        # --- Compute 4×4 transform between nodes ---
+        targetPose = vtk.vtkMatrix4x4()
+        if not slicer.vtkMRMLTransformNode.GetMatrixTransformBetweenNodes(fromNode, toNode, targetPose):
+            raise RuntimeError("Could not compute transform between nodes.")
+        
+        # DEBUG: Print full 4x4 matrix
+        print(f"\n[MoveIt IK] Target Pose Matrix (4x4):")
+        print(f"  [{targetPose.GetElement(0,0):.3f}, {targetPose.GetElement(0,1):.3f}, {targetPose.GetElement(0,2):.3f}, {targetPose.GetElement(0,3):.2f}]")
+        print(f"  [{targetPose.GetElement(1,0):.3f}, {targetPose.GetElement(1,1):.3f}, {targetPose.GetElement(1,2):.3f}, {targetPose.GetElement(1,3):.2f}]")
+        print(f"  [{targetPose.GetElement(2,0):.3f}, {targetPose.GetElement(2,1):.3f}, {targetPose.GetElement(2,2):.3f}, {targetPose.GetElement(2,3):.2f}]")
+        print(f"  [{targetPose.GetElement(3,0):.3f}, {targetPose.GetElement(3,1):.3f}, {targetPose.GetElement(3,2):.3f}, {targetPose.GetElement(3,3):.3f}]")
+        
+        seed = self.last_ik_solution
+        result_str = robotmodel.FindIKmoveit(targetPose, tipLink, seed, 0.05)
+
+        if result_str and result_str.strip():
+            # Parse comma-separated string into list of floats
+            try:
+                data = [float(x) for x in result_str.split(",")]
+                print(f"[IK] Joint Solution: {data}")
+                self.last_ik_solution = data
+                # Publish the joint state solution
+                self.updateGhostTransformsFromJoints(robotmodel, data)
+                return data
+
+            except ValueError as e:
+                print(f"[IK] Failed to parse solution: {e}")
+                return None
+        else:
+            print(f"[IK] Empty result from FindIK")
+            return None
     
     
-    def compute_ik_once(self, robotmodel):
-            # robotmodel is required because we need to call robotmodel.FindKDLIK()
-            
+    def compute_ik_once(self, robotmodel):            
             # --- Get Slicer transform nodes ---
             fromNode = self.obsNode
             toNode   = self.toNode
-
+            
             if fromNode is None or toNode is None:
                 return None
+
+            # DEBUG: Log which transforms we're computing between
+            print(f"\n[IK] Computing transform from '{fromNode.GetName()}' to '{toNode.GetName()}'")
 
             # --- Compute 4×4 transform between nodes ---
             targetPose = vtk.vtkMatrix4x4()
@@ -886,8 +1111,7 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
                     data = [float(x) for x in result_str.split(",")]
                     print(f"[IK] Solution found: {data}")
                     self.last_ik_solution = data
-                    # self._publish_joint_state(data)
-                    robotmodel.ApplyGhostJoints(data)
+                    self.updateGhostTransformsFromJoints(robotmodel, data)
                     return data
                 except ValueError as e:
                     print(f"[IK] Failed to parse solution: {e}")
@@ -895,65 +1119,16 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
             else:
                 print(f"[IK] Empty result from FindKDLIK")
                 return None
-
-    def _publish_joint_state(self, joint_positions):
-            """Publish joint state to topic, handling ghost prefix automatically."""
-            if self.joint_state_publisher is None:
-                return
-            
-            try:
-                jsmsg = self.joint_state_publisher.GetBlankMessage()
-                
-                # Use stored joint names (these are CLEAN, e.g. "shoulder_pan_joint")
-                original_names = self.joint_names
-                num_joints = len(joint_positions)
-                
-                # --- DETECT GHOST TOPIC ---
-                topic_name = ""
-                if hasattr(self.joint_state_publisher, "GetTopic"):
-                    topic_name = self.joint_state_publisher.GetTopic()
-                elif hasattr(self.joint_state_publisher, "GetTopicName"):
-                    topic_name = self.joint_state_publisher.GetTopicName()
-
-                # --- GENERATE PUBLISH NAMES ---
-                # Create a temporary list for this message only.
-                publish_names = []
-                
-                if "ghost" in topic_name:
-                    # Add 'ghost_' prefix on the fly
-                    publish_names = [
-                        f"ghost_{name}" if not name.startswith("ghost_") else name 
-                        for name in original_names
-                    ]
-                else:
-                    # Use clean names
-                    publish_names = original_names
-                # -------------------------------
-                
-                # Set header stuff...
-                current_time = time.time()
-                sec = int(current_time)
-                nanosec = int((current_time - sec) * 1e9)
-                header = jsmsg.GetHeader()
-                timestamp = header.GetStamp()
-                timestamp.SetSec(sec)
-                timestamp.SetNanosec(nanosec)
-        
-                # Use the TEMPORARY list 'publish_names'
-                jsmsg.SetName(publish_names)
-                jsmsg.SetPosition(joint_positions)
-                jsmsg.SetVelocity([0.0] * num_joints)
-                jsmsg.SetEffort([float('nan')] * num_joints)
-                
-                self.joint_state_publisher.Publish(jsmsg)
-            except Exception as e:
-                print(f"[IK] Failed to publish joint state: {e}")
-    
     
     def addObserverComputeIK(self, robotmodel=None):
             """
             Observe transform changes. Uses self.obsNode and self.toNode that should be
             set by setupikforRobot(). Each transform update triggers IK computation.
+            Uses either KDL (default) or MoveIt IK based on useMoveItIK flag.
+            
+            Args:
+                robotmodel: The robot model for KDL IK
+                Planning group name is read from self.plangroup (updated by widget)
             """
             fromNode = self.obsNode
             toNode   = self.toNode
@@ -970,8 +1145,24 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
             self.toNode = toNode
 
             def onModified(caller, eventId):
-                # Trigger IK compute
-                self.compute_ik_once(robotmodel=robotmodel)
+                # Get the target pose
+                targetPose = vtk.vtkMatrix4x4()
+                success = slicer.vtkMRMLTransformNode.GetMatrixTransformBetweenNodes(
+                    self.obsNode, self.toNode, targetPose
+                )
+                
+                if not success:
+                    return
+                
+                # Choose IK solver based on flag
+                if self.useMoveItIK:
+                    # Use MoveIt IK via robotmodel integration
+                    solution = self.computeIKWithMoveIt(robotmodel=robotmodel, tipLink=self.tipLink)
+                    if solution:
+                        print(f"[MoveIt IK] Solution: {solution}")
+                else:
+                    # Use KDL IK (original method)
+                    self.compute_ik_once(robotmodel=robotmodel)
 
             self.callback = onModified
             eventId = slicer.vtkMRMLTransformNode.TransformModifiedEvent
@@ -1074,6 +1265,62 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
             names.append(name)
 
         return names
+    
+    def parse_joint_structure_from_urdf(self, urdf_xml: str):
+            """
+            Returns a dict mapping joint_name -> {'parent', 'child', 'axis', 'type', 'origin_rpy'}
+            """
+            import xml.etree.ElementTree as ET
+            root = ET.fromstring(urdf_xml)
+            joint_info = {}
+
+            for joint in root.findall("joint"):
+                name = joint.get("name", "")
+                jtype = joint.get("type", "")
+                
+                # Skip if no name or fixed (unless you need fixed joints later)
+                if not name or jtype == "fixed":
+                    continue
+
+                parent_elem = joint.find("parent")
+                child_elem = joint.find("child")
+                axis_elem = joint.find("axis")
+                origin_elem = joint.find("origin")  # <--- NEW: Find the origin tag
+                
+                if parent_elem is None or child_elem is None:
+                    continue
+                    
+                parent_link = parent_elem.get("link", "")
+                child_link = child_elem.get("link", "")
+                
+                # Default axis
+                axis = [0.0, 0.0, 1.0]
+                if axis_elem is not None:
+                    xyz = axis_elem.get("xyz", "0 0 1")
+                    try:
+                        axis = [float(x) for x in xyz.split()]
+                    except ValueError:
+                        pass
+                
+                # --- NEW: Extract Origin RPY ---
+                origin_rpy = [0.0, 0.0, 0.0]
+                if origin_elem is not None:
+                    rpy_str = origin_elem.get("rpy", "0 0 0")
+                    try:
+                        origin_rpy = [float(x) for x in rpy_str.split()]
+                    except ValueError:
+                        pass
+                # -------------------------------
+                
+                joint_info[name] = {
+                    'parent': parent_link,
+                    'child': child_link,
+                    'axis': axis,
+                    'type': jtype,
+                    'origin_rpy': origin_rpy  # <--- Store it here
+                }
+
+            return joint_info
 
     
     def setJointSlidersFromUrdfLimits(self, limits_rad, sliders):
@@ -1110,7 +1357,289 @@ class RoboDragLogic(ScriptedLoadableModuleLogic):
                 print(f"Logic Linked: '{fromtransformname}' -> '{totransformname}'")
             else:
                 print("Error: Could not link IK transforms (Nodes missing)")
+                
+    def getcurrentjointpositions(self, robotmodel):
+            """
+            Calculate current joint values by subtracting the fixed URDF origin 
+            from the measured link transforms.
+            """
+
+            if not robotmodel:
+                print("Error: No robot model provided")
+                return []
             
+            # Get joint names
+            joint_names = robotmodel.GetJoints()
+            if not joint_names:
+                print("Error: No joints found in robot model")
+                return []
+            
+            # Get URDF to parse joint structure
+            pnode = robotmodel.GetNthNodeReference("parameter", 0)
+            if not pnode:
+                print("Error: No parameter node found for robot")
+                return []
+            urdf_xml = pnode.GetParameterAsString("robot_description")
+            
+            # Parse joint structure (Must include origin_rpy logic!)
+            joint_info = self.parse_joint_structure_from_urdf(urdf_xml)
+            
+            joint_positions = []
+            
+            for joint_name in joint_names:
+                try:
+                    # 1. Validation
+                    if joint_name not in joint_info:
+                        print(f"Warning: Joint '{joint_name}' not found in URDF")
+                        joint_positions.append(0.0)
+                        continue
+                    
+                    info = joint_info[joint_name]
+                    parent_link = info['parent']
+                    child_link = info['child']
+                    axis = info['axis']
+                    # Default to [0,0,0] if not found
+                    origin_rpy = info.get('origin_rpy', [0.0, 0.0, 0.0]) 
+                    
+                    # 2. Find Slicer Nodes for Parent and Child
+                    real_parent_model = f"{parent_link}"
+                    real_child_model = f"{child_link}"
+                    
+                    try:
+                        parent_transform = self.findRobotTransforms(real_parent_model, ghost=False)
+                        child_transform = self.findRobotTransforms(real_child_model, ghost=False)
+                    except Exception:
+                        # If transforms aren't in the scene, assume 0.0
+                        joint_positions.append(0.0)
+                        continue
+                    
+                    # 3. Get Measured Matrix (Total Transform = Origin * JointRotation)
+                    # This calculates the transform of Child relative to Parent
+                    measured_matrix = vtk.vtkMatrix4x4()
+                    slicer.vtkMRMLTransformNode.GetMatrixTransformBetweenNodes(
+                        child_transform, parent_transform, measured_matrix
+                    )
+                    
+                    # 4. Create the Structural Origin Matrix
+                    # We apply rotations in Z, Y, X order which corresponds to URDF Euler RPY
+                    origin_transform = vtk.vtkTransform()
+                    origin_transform.RotateZ(math.degrees(origin_rpy[2]))
+                    origin_transform.RotateY(math.degrees(origin_rpy[1]))
+                    origin_transform.RotateX(math.degrees(origin_rpy[0]))
+                    
+                    origin_matrix = origin_transform.GetMatrix()
+                    
+                    # 5. Isolate the Joint Rotation
+                    # Math: T_rotation = (T_origin)^-1 * T_measured
+                    origin_matrix.Invert() 
+                    
+                    pure_joint_matrix = vtk.vtkMatrix4x4()
+                    vtk.vtkMatrix4x4.Multiply4x4(origin_matrix, measured_matrix, pure_joint_matrix)
+                    
+                    # 6. Extract the Angle from the Pure Matrix
+                    final_transform = vtk.vtkTransform()
+                    final_transform.SetMatrix(pure_joint_matrix)
+                    rotation = final_transform.GetOrientation()  # Returns [rx, ry, rz] in degrees
+                    
+                    # 7. Select the correct axis
+                    # Find the dominant axis (largest absolute value in the axis vector)
+                    abs_axis = [abs(a) for a in axis]
+                    max_idx = abs_axis.index(max(abs_axis))
+                    
+                    angle_deg = rotation[max_idx]
+                    
+                    # Flip sign if the axis definition is negative (e.g., [0, 0, -1])
+                    if axis[max_idx] < 0:
+                        angle_deg = -angle_deg
+                        
+                    # Clamp tiny noise to 0.0 to prevent flickering
+                    if abs(angle_deg) < 0.1:
+                        angle_deg = 0.0
+
+                    angle_rad = math.radians(angle_deg)
+                    
+                    # Debug print (Optional)
+                    # print(f"Joint {joint_name}: raw={rotation}, fixed={angle_deg}")
+
+                    joint_positions.append(angle_rad)
+                        
+                except Exception as e:
+                    print(f"Error reading real robot joint '{joint_name}': {e}")
+                    joint_positions.append(0.0)
+            
+            return joint_positions
+    
+    def getcurrentghostjointpositions(self, robotmodel):
+        """
+        Calculate current joint values from the ghost robot's link transforms.
+        Returns a list of joint angles in radians.
+        """
+        if not robotmodel:
+            print("Error: No robot model provided")
+            return []
+        
+        # Get joint names
+        joint_names = robotmodel.GetJoints()
+        if not joint_names:
+            print("Error: No joints found in robot model")
+            return []
+        
+        # Get URDF to parse joint structure
+        pnode = robotmodel.GetNthNodeReference("parameter", 0)
+        if not pnode:
+            print("Error: No parameter node found for robot")
+            return []
+        urdf_xml = pnode.GetParameterAsString("robot_description")
+        
+        # Parse joint structure from URDF
+        joint_info = self.parse_joint_structure_from_urdf(urdf_xml)
+        
+        joint_positions = []
+        
+        # For each joint, compute the relative rotation between parent and child links
+        # Ghost links have "_ghost" suffix in their model names
+        for joint_name in joint_names:
+            try:
+                if joint_name not in joint_info:
+                    print(f"Warning: Joint '{joint_name}' not found in URDF")
+                    joint_positions.append(0.0)
+                    continue
+                
+                info = joint_info[joint_name]
+                parent_link = info['parent']
+                child_link = info['child']
+                axis = info['axis']
+                
+                # Ghost links have model names with "_ghost" suffix
+                # When ghost=True, findRobotTransforms expects the full model node name
+                ghost_parent_model = f"{parent_link}_model_ghost"
+                ghost_child_model = f"{child_link}_model_ghost"
+                
+                # Get transform nodes for ghost parent and child links
+                try:
+                    parent_transform = self.findRobotTransforms(ghost_parent_model, ghost=True)
+                    child_transform = self.findRobotTransforms(ghost_child_model, ghost=True)
+                except RuntimeError as e:
+                    print(f"Warning: Could not find ghost transforms for joint '{joint_name}': {e}")
+                    joint_positions.append(0.0)
+                    continue
+                
+                # Compute relative transform from child to parent
+                rel_matrix = vtk.vtkMatrix4x4()
+                slicer.vtkMRMLTransformNode.GetMatrixTransformBetweenNodes(
+                    child_transform, parent_transform, rel_matrix
+                )
+                
+                # Extract rotation angle around the joint axis
+                transform = vtk.vtkTransform()
+                transform.SetMatrix(rel_matrix)
+                rotation = transform.GetOrientation()  # Returns [rx, ry, rz] in degrees
+                
+                # Determine which axis component to use based on joint axis
+                # Find the dominant axis (largest absolute value)
+                abs_axis = [abs(a) for a in axis]
+                max_idx = abs_axis.index(max(abs_axis))
+                
+                angle_deg = rotation[max_idx]
+                # If axis is negative, flip the angle
+                if axis[max_idx] < 0:
+                    angle_deg = -angle_deg
+                    
+                angle_rad = math.radians(angle_deg)
+                print(f"[Ghost] {joint_name}: axis={axis}, rotation_deg={[f'{r:.1f}' for r in rotation]}, extracted_deg={angle_deg:.1f}, rad={angle_rad:.4f}")
+                joint_positions.append(angle_rad)
+                    
+            except Exception as e:
+                print(f"Error reading ghost joint '{joint_name}': {e}")
+                joint_positions.append(0.0)
+        
+        return joint_positions
+    
+    def updateGhostTransformsFromJoints(self, robotmodel, joint_values):
+        """
+        Update all ghost robot link transforms for a given set of joint values.
+        Uses the robot's ComputeLocalTransform C++ method to compute each link's
+        local transform relative to its parent, then applies it to the ghost transform nodes.
+        
+        Args:
+            robotmodel: The robot model node with ComputeLocalTransform method
+            joint_values: List of joint angles in radians
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        if not robotmodel:
+            print("Error: No robot model provided")
+            return False
+        
+        if not joint_values:
+            print("Error: No joint values provided")
+            return False
+        
+        # Get URDF to parse link hierarchy
+        pnode = robotmodel.GetNthNodeReference("parameter", 0)
+        if not pnode:
+            print("Error: No parameter node found for robot")
+            return False
+        urdf_xml = pnode.GetParameterAsString("robot_description")
+        
+        # Parse joint structure to get all child links
+        joint_info = self.parse_joint_structure_from_urdf(urdf_xml)
+        
+        # Get all link names from URDF
+        all_links = self.parse_all_link_names_from_urdf(urdf_xml)
+        
+        if not all_links:
+            print("Error: No links found in URDF")
+            return False
+        
+        # Identify child links (links that have a parent joint)
+        # Skip the root link since it has no parent joint
+        child_links = set()
+        for joint_name, joint_data in joint_info.items():
+            child_links.add(joint_data['child'])
+        
+        success_count = 0
+        
+        # For each link that has a parent joint, compute and apply its local transform
+        for link_name in all_links:
+            # Skip links that don't have a parent joint (e.g., root link)
+            if link_name not in child_links:
+                continue
+            
+            try:
+                # Create a matrix to receive the computed transform
+                local_matrix = vtk.vtkMatrix4x4()
+                
+                # Call the C++ ComputeLocalTransform method
+                result = robotmodel.ComputeLocalTransform(joint_values, local_matrix, link_name)
+                
+                if not result:
+                    print(f"Warning: ComputeLocalTransform failed for link '{link_name}'")
+                    continue
+                
+                # Find the ghost transform node for this link
+                # Ghost links have "_ghost" suffix
+                ghost_model_name = f"{link_name}_model_ghost"
+                
+                try:
+                    ghost_transform = self.findRobotTransforms(ghost_model_name, ghost=True)
+                except RuntimeError as e:
+                    # Some links may not have visual models, skip them
+                    continue
+                
+                # Apply the computed local transform to the ghost transform node
+                ghost_transform.SetMatrixTransformToParent(local_matrix)
+                success_count += 1
+                
+            except Exception as e:
+                print(f"Error updating ghost transform for link '{link_name}': {e}")
+                continue
+        
+        print(f"[updateGhostTransforms] Updated {success_count}/{len(child_links)} ghost transforms")
+        return success_count > 0
+ 
+    
 
 
     

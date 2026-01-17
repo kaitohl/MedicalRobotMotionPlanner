@@ -20,7 +20,7 @@
       </sizepolicy>
      </property>
      <property name="currentIndex">
-      <number>0</number>
+      <number>2</number>
      </property>
      <widget class="QWidget" name="loadtab">
       <property name="contextMenuPolicy">
@@ -38,16 +38,16 @@
         </widget>
        </item>
        <item row="0" column="1">
-        <widget class="qMRMLNodeComboBox" name="ikrobotcombobox">
-         <property name="nodeTypes">
+        <widget class="qMRMLNodeComboBox" name="ikrobotcombobox" native="true">
+         <property name="nodeTypes" stdset="0">
           <stringlist notr="true">
            <string>vtkMRMLROS2RobotNode</string>
           </stringlist>
          </property>
-         <property name="hideChildNodeTypes">
+         <property name="hideChildNodeTypes" stdset="0">
           <stringlist notr="true"/>
          </property>
-         <property name="interactionNodeSingletonTag">
+         <property name="interactionNodeSingletonTag" stdset="0">
           <string notr="true"/>
          </property>
         </widget>
@@ -60,14 +60,14 @@
         </widget>
        </item>
        <item row="2" column="0" colspan="2">
-        <widget class="ctkCollapsibleButton" name="appCollapsibleButton">
+        <widget class="ctkCollapsibleButton" name="appCollapsibleButton" native="true">
          <property name="enabled">
           <bool>true</bool>
          </property>
-         <property name="text">
+         <property name="text" stdset="0">
           <string>Robot Appearance </string>
          </property>
-         <property name="collapsed">
+         <property name="collapsed" stdset="0">
           <bool>false</bool>
          </property>
          <layout class="QFormLayout" name="formLayout_6">
@@ -79,16 +79,16 @@
            </widget>
           </item>
           <item row="2" column="1">
-           <widget class="qMRMLNodeComboBox" name="robotcomboBox">
-            <property name="nodeTypes">
+           <widget class="qMRMLNodeComboBox" name="robotcomboBox" native="true">
+            <property name="nodeTypes" stdset="0">
              <stringlist notr="true">
               <string>vtkMRMLROS2RobotNode</string>
              </stringlist>
             </property>
-            <property name="hideChildNodeTypes">
+            <property name="hideChildNodeTypes" stdset="0">
              <stringlist notr="true"/>
             </property>
-            <property name="interactionNodeSingletonTag">
+            <property name="interactionNodeSingletonTag" stdset="0">
              <string notr="true"/>
             </property>
            </widget>
@@ -173,7 +173,7 @@
        <string>3D Control</string>
       </attribute>
       <layout class="QFormLayout" name="formLayout">
-       <item row="2" column="0">
+       <item row="6" column="1">
         <widget class="QCheckBox" name="checkBox">
          <property name="enabled">
           <bool>true</bool>
@@ -183,29 +183,7 @@
          </property>
         </widget>
        </item>
-       <item row="2" column="1">
-        <widget class="ctkCollapsibleButton" name="moveCollapsibleButton">
-         <property name="enabled">
-          <bool>false</bool>
-         </property>
-         <property name="text">
-          <string>Move Group</string>
-         </property>
-         <property name="collapsed">
-          <bool>true</bool>
-         </property>
-         <layout class="QFormLayout" name="formLayout_4">
-          <item row="0" column="0">
-           <widget class="QPushButton" name="pushButton">
-            <property name="text">
-             <string>PushButton</string>
-            </property>
-           </widget>
-          </item>
-         </layout>
-        </widget>
-       </item>
-       <item row="3" column="0" colspan="2">
+       <item row="7" column="0" colspan="2">
         <spacer name="verticalSpacer_2">
          <property name="orientation">
           <enum>Qt::Vertical</enum>
@@ -218,21 +196,60 @@
          </property>
         </spacer>
        </item>
+       <item row="5" column="1">
+        <widget class="QLineEdit" name="plangroupline"/>
+       </item>
+       <item row="5" column="0">
+        <widget class="QLabel" name="plangroup">
+         <property name="text">
+          <string>Planning Group Name</string>
+         </property>
+        </widget>
+       </item>
       </layout>
      </widget>
      <widget class="QWidget" name="moveittab">
       <attribute name="title">
        <string>Trajectory</string>
       </attribute>
+      <layout class="QFormLayout" name="formLayout_5">
+       <item row="0" column="1">
+        <widget class="QPushButton" name="planbutton">
+         <property name="text">
+          <string>Plan</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <widget class="QPushButton" name="previewbutton">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="text">
+          <string>Preview</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QPushButton" name="executebutton">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="text">
+          <string>Execute</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
      </widget>
     </widget>
    </item>
    <item>
-    <widget class="ctkCollapsibleButton" name="advancedCollapsibleButton">
-     <property name="text">
+    <widget class="ctkCollapsibleButton" name="advancedCollapsibleButton" native="true">
+     <property name="text" stdset="0">
       <string>Advanced</string>
      </property>
-     <property name="collapsed">
+     <property name="collapsed" stdset="0">
       <bool>true</bool>
      </property>
      <layout class="QFormLayout" name="formLayout_3">
