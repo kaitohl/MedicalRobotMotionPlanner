@@ -565,6 +565,7 @@ class RoboDragWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         # Update ghost robot with zero positions
         if self.logic is not None and self.robot is not None:
             self.logic.updateGhostTransformsFromJoints(self.robot, self.jointPositionsRad)
+            self.logic.last_ik_solution = self.jointPositionsRad.copy()
 
     def onMoveGroupToggled(self, toggled: bool) -> None:
         if toggled:
