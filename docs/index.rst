@@ -4,10 +4,10 @@ MedicalRobotMotionPlanner
 Welcome to the documentation for MedicalRobotMotionPlanner.
 
 .. toctree::
-   :maxdepth: 2
-   :caption: Contents
+   :maxdepth: 3
+   :caption: Contents:
 
-   introduction/index
-   loading_robot/index
-   manipulating_robot/index
-   moveit_integration/index
+   pages/introduction
+   pages/loading_robot
+   pages/manipulating_robot
+   pages/moveit_integration
