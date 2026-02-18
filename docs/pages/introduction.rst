@@ -14,7 +14,9 @@ Overview
 
    introduction/overview
 
-Getting Started
+   test
+
+Acknowledgements
 ---------------
 
 .. toctree::
