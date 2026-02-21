@@ -20,7 +20,7 @@ Then create another terminal, source the workspace again, and navigate to the Sl
 Once Slicer is launched, you should have the SlicerROS2 module available. Open the module, and follow section 3.3 in the SlicerROS2 documentation to connect to the ROS2 nodes and visualize the robot in Slicer. You should see the MyCobot 280 M5 robot in the 3D view of Slicer.
 
 Loading The Medical Robot Motion Planner
-----------------------------------------
+-----------------------------------------
 
 To load the Medical Robot Motion Planner, clone the following repository: https://github.com/kaitohl/MedicalRobotMotionPlanner
 
