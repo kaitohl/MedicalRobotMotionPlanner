@@ -22,6 +22,19 @@ Required software for installation includes:
 - MoveIt 2 Library
 - KDL Library
 
-To install SlicerROS2, follow this link: https://slicer-ros2.readthedocs.io/en/v1.0/index.html
+To install SlicerROS2, follow this link: https://slicer-ros2.readthedocs.io/en/v1.0/index.html and follow the instructions for installation.
 
 Please use this forked repository of SlicerROS2: https://github.com/kaitohl/slicer_ros2_module
+
+MyCobot 280 M5 Example
+-----------------------
+
+The MyCobot 280 M5 is a 6-DOF robotic arm that can be used for various testing applications. We will use this robot as an example to demonstrate the capabilities of the MedicalRobotMotionPlanner workspace.
+
+Please folow this link: https://github.com/elephantrobotics/mycobot_ros2 to clone the ROS2 package for MyCobot. Ensure you are on the correct branch for ROS2 Humble.
+
+.. code-block:: bash
+
+   sudo apt update
+   sudo apt install ros-humble-desktop
+   source /opt/ros/humble/setup.bash
