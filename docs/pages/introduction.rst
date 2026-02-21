@@ -51,7 +51,7 @@ After succesfully building and sourcing the ROS2 package, you can launch the nec
 
    ros2 launch mycobot_ros2_moveit2 demo.launch.py
 
-This will launch the follwing:
+This will launch the following:
 
 - static_virtual_joint_tfs
 - robot_state_publisher
