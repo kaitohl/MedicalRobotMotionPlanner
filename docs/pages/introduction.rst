@@ -33,6 +33,8 @@ The MyCobot 280 M5 is a 6-DOF robotic arm that can be used for various testing a
 
 Please folow this link: https://github.com/elephantrobotics/mycobot_ros2 to clone the ROS2 package for MyCobot. Ensure you are on the correct branch for ROS2 Humble.
 
+Note: To vizualize the robot in SlicerROS2, you will need to change the URDF file to include the correct path to the mesh files. Currently the mycobot 280 m5 URDF file points the mesh files to .dae files, but SlicerROS2 requires .stl files. The URDF and .dae files for the mycobot 280 m5 is located at ``mycobot_description/urdf/mycobot_280_m5``. You will need to change the URDF file to point to the .stl files located in the same directory.
+
 .. code-block:: bash
 
    sudo apt update
