@@ -28,6 +28,6 @@ To load the Medical Robot Motion Planner, clone the following repository: https:
 To add the module to 3D Slicer, navigate to the Edit -> Application Settings - > Modules, and add the path to the MedicalRobotMotionPlanner directory to the list of additional module paths. Then restart Slicer, and you should see the Medical Robot Motion Planner module in the list of modules. You can then open the module and start using it for your motion planning needs!
 
 .. image:: ../images/load.png
-   :width: 600px
+   :width: 300px
    :align: center
    :alt: Loading the robot
