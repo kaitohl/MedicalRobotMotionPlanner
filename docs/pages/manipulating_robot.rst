@@ -1,9 +1,10 @@
 Manipulating The Robot
 =======================
 
-.. toctree::
-   :maxdepth: 2
+Joint Control
+----------------
 
-   manipulating_robot/basic_operations
-   manipulating_robot/advanced_operations
-   manipulating_robot/examples
+
+3D Control
+------------
+
