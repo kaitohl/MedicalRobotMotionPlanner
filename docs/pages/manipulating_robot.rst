@@ -19,7 +19,14 @@ Once a robot is selected, the "Joint Control" tab will populate with sliders wit
 
 The "3D Control" tab allows you to manipulate the end effector of the robot in 3D space. You can use the interactive 3D widget to move the end effector to a desired position and orientation, and the robot will automatically calculate the inverse kinematics to move the joints accordingly. This allows for more intuitive control of the robot, as you can directly manipulate the end effector without having to worry about the individual joint values. By default, the inverse kinematics of the robot is calculated using the KDL library. However, if your robot has MoveIt2 support, you can switch to using MoveIt2 for inverse kinematics by selecting the "Use Move group" checkbox. You are required to give the planning group name for your robot, which can be found in the MoveIt2 configuration package for your robot. Once you have entered the planning group name, the robot will use MoveIt2 to calculate the inverse kinematics, which can provide better results for certain robots and configurations.
 
-.. image:: ../images/control.png
++---------------------------+---------------------------+
+| |control|                 | |robotcontrol|            |
++---------------------------+---------------------------+
+
+.. |control| image:: ../images/control.png
    :width: 300px
-   :align: center
    :alt: 3D Control
+
+.. |robotcontrol| image:: ../images/robotcontrol.png
+   :width: 300px
+   :alt: Robot Control
