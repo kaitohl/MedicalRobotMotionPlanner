@@ -19,7 +19,7 @@ Once a robot is selected, the "Joint Control" tab will populate with sliders wit
 
 The "3D Control" tab allows you to manipulate the end effector of the robot in 3D space. You can use the interactive 3D widget to move the end effector to a desired position and orientation, and the robot will automatically calculate the inverse kinematics to move the joints accordingly. This allows for more intuitive control of the robot, as you can directly manipulate the end effector without having to worry about the individual joint values. By default, the inverse kinematics of the robot is calculated using the KDL library. However, if your robot has MoveIt2 support, you can switch to using MoveIt2 for inverse kinematics by selecting the "Use Move group" checkbox. You are required to give the planning group name for your robot, which can be found in the MoveIt2 configuration package for your robot. Once you have entered the planning group name, the robot will use MoveIt2 to calculate the inverse kinematics, which can provide better results for certain robots and configurations.
 
-|control| |robotcontrol|
+.. centered:: |control| |robotcontrol|
 
 .. |control| image:: ../images/control.png
    :width: 300px
@@ -34,7 +34,7 @@ Trajectory
 
 The "Trajectory" tab allows you to visualize the trajectory of the robot as you manipulate it in the "Joint Control" and "3D Control" tabs. To use this function, a planning group name is required, and the "Use Move group" checkbox must be selected to use MoveIt2 under the "3D Control" tab. You can set a goal position under either the "Joint Control" or "3D Control" tab by simply moving the robot to a desired position. Once you have set a goal position, and you have given a planning group name, you can navigate to the "Trajectory" tab and plan, preview, and execute a trajectory. The "Plan" button will calculate a trajectory from the current position of the robot to the goal position you set. Once a succesful plan is calculated, a trajectory scrubber will appear allowing you to walk through the trajectory by dragging the slider. You can also preview the entire trajectory by selecting the "Preview" button. Finally, the "Execute" button will execute the planned trajectory, moving the robot to the goal position.
 
-|traj| |trajrobot|
+.. centered:: |traj| |trajrobot|
 
 .. |traj| image:: ../images/fulltraj.png
    :width: 300px
