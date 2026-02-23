@@ -28,3 +28,20 @@ The "3D Control" tab allows you to manipulate the end effector of the robot in 3
 .. |robotcontrol| image:: ../images/robotcontrol.png
    :width: 300px
    :alt: Robot Control
+
+Trajectory
+-----------
+
+The "Trajectory" tab allows you to visualize the trajectory of the robot as you manipulate it in the "Joint Control" and "3D Control" tabs. To use this function, a planning group name is required, and the "Use Move group" checkbox must be selected to use MoveIt2 under the "3D Control" tab. You can set a goal position under either the "Joint Control" or "3D Control" tab by simply moving the robot to a desired position. Once you have set a goal position, and you have given a planning group name, you can navigate to the "Trajectory" tab and plan, preview, and execute a trajectory. The "Plan" button will calculate a trajectory from the current position of the robot to the goal position you set. Once a succesful plan is calculated, a trajectory scrubber will appear allowing you to walk through the trajectory by dragging the slider. You can also preview the entire trajectory by selecting the "Preview" button. Finally, the "Execute" button will execute the planned trajectory, moving the robot to the goal position.
+
+|traj| |trajrobot|
+
+.. |traj| image:: ../images/traj.png
+   :width: 300px
+   :alt: Trajectory Control
+
+.. |trajrobot| image:: ../images/trajrobot.png
+   :width: 300px
+   :alt: Trajectory Robot Control
+
+
