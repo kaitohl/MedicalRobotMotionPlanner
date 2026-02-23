@@ -31,3 +31,5 @@ To add the module to 3D Slicer, navigate to the Edit -> Application Settings - >
    :width: 300px
    :align: center
    :alt: Loading the robot
+
+If a robot is successfully loaded, the drop down menu next to "Robot Name:" should populate with your robot's name. Select it and click "Use". You are now ready to use the Medical Robot Motion Planner for your motion planning needs!
