@@ -36,7 +36,7 @@ The "Trajectory" tab allows you to visualize the trajectory of the robot as you 
 
 |traj| |trajrobot|
 
-.. |traj| image:: ../images/traj.png
+.. |traj| image:: ../images/fulltraj.png
    :width: 300px
    :alt: Trajectory Control
 
