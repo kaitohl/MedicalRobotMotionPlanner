@@ -17,7 +17,12 @@ Then create another terminal, source the workspace again, and navigate to the Sl
    cd ~/something_something/Slicer-SuperBuild/Slicer-build
    ./Slicer
 
-Once Slicer is launched, you should have the SlicerROS2 module available. Open the module, and follow section 3.3 in the SlicerROS2 documentation to connect to the ROS2 nodes and visualize the robot in Slicer. You should see the MyCobot 280 M5 robot in the 3D view of Slicer.
+Once Slicer is launched, you should have the SlicerROS2 module available. Open the module, and follow section 3.3 in the SlicerROS2 documentation to connect to the ROS2 nodes and visualize the robot in Slicer. There is an additional feature added to this module that allows you to load a "goal state" model of your robot. This model is a transparent version of your robot that can be used to visualize the goal position of the robot when planning trajectories. To load this model, simply check the "Load Goal State" checkbox in the SlicerROS2 module.You should see the MyCobot 280 M5 robot and the goal state overlayed in the 3D view of Slicer.
+
+.. image:: ../images/ros2load.png
+   :width: 300px
+   :align: center
+   :alt: Loading the robot ros2
 
 Loading The Medical Robot Motion Planner
 ------------------------------------------
@@ -33,3 +38,4 @@ To add the module to 3D Slicer, navigate to the Edit -> Application Settings - >
    :alt: Loading the robot
 
 If a robot is successfully loaded, the drop down menu next to "Robot Name:" should populate with your robot's name. Select it and click "Use". You are now ready to use the Medical Robot Motion Planner for your motion planning needs!
+
